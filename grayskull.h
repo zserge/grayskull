@@ -17,6 +17,10 @@ struct gs_point {
 struct gs_rect {
   unsigned x, y, w, h;
 };
+
+struct gs_quad {
+  struct gs_point corners[4];  // Top-left, top-right, bottom-right, bottom-left
+};
 struct gs_image {
   unsigned w, h;
   uint8_t *data;
@@ -168,6 +172,139 @@ GS_API void gs_sobel(struct gs_image dst, struct gs_image src) {
       int magnitude = (abs(gx) + abs(gy)) / 2;
       dst.data[y * dst.w + x] = (uint8_t)GS_MAX(0, GS_MIN(magnitude, 255));
     }
+  }
+}
+
+// Simple contour detection - finds the largest connected component bounding box
+GS_API struct gs_rect gs_find_largest_contour(struct gs_image binary_img) {
+  gs_assert(gs_valid(binary_img));
+
+  // Find bounding box of all white pixels
+  unsigned min_x = binary_img.w, max_x = 0;
+  unsigned min_y = binary_img.h, max_y = 0;
+  int found_pixels = 0;
+
+  gs_for(binary_img, x, y) {
+    if (binary_img.data[y * binary_img.w + x] > 128) {  // White pixel
+      if (x < min_x) min_x = x;
+      if (x > max_x) max_x = x;
+      if (y < min_y) min_y = y;
+      if (y > max_y) max_y = y;
+      found_pixels = 1;
+    }
+  }
+
+  if (!found_pixels) return (struct gs_rect){0, 0, 0, 0};
+
+  return (struct gs_rect){min_x, min_y, max_x - min_x + 1, max_y - min_y + 1};
+}
+
+// Convert rectangle to quadrilateral for perspective correction
+GS_API struct gs_quad gs_rect_to_quad(struct gs_rect rect) {
+  struct gs_quad quad;
+  quad.corners[0] = (struct gs_point){rect.x, rect.y};                            // Top-left
+  quad.corners[1] = (struct gs_point){rect.x + rect.w - 1, rect.y};               // Top-right
+  quad.corners[2] = (struct gs_point){rect.x + rect.w - 1, rect.y + rect.h - 1};  // Bottom-right
+  quad.corners[3] = (struct gs_point){rect.x, rect.y + rect.h - 1};               // Bottom-left
+  return quad;
+}
+
+// Find document corners by detecting the outermost edge pixels in each quadrant
+GS_API struct gs_quad gs_find_document_corners(struct gs_image binary_edges) {
+  gs_assert(gs_valid(binary_edges));
+
+  // Get image center
+  unsigned cx = binary_edges.w / 2;
+  unsigned cy = binary_edges.h / 2;
+
+  // Initialize corners to center (fallback)
+  struct gs_quad quad;
+  quad.corners[0] = (struct gs_point){cx, cy};  // Top-left
+  quad.corners[1] = (struct gs_point){cx, cy};  // Top-right
+  quad.corners[2] = (struct gs_point){cx, cy};  // Bottom-right
+  quad.corners[3] = (struct gs_point){cx, cy};  // Bottom-left
+
+  // Find the outermost white pixels in each quadrant
+  gs_for(binary_edges, x, y) {
+    if (binary_edges.data[y * binary_edges.w + x] > 128) {  // White edge pixel
+
+      // Top-left quadrant: maximize distance from center
+      if (x <= cx && y <= cy) {
+        unsigned current_dist = (cx - x) + (cy - y);
+        unsigned corner_dist = (cx - quad.corners[0].x) + (cy - quad.corners[0].y);
+        if (current_dist > corner_dist) { quad.corners[0] = (struct gs_point){x, y}; }
+      }
+
+      // Top-right quadrant: maximize distance from center
+      if (x >= cx && y <= cy) {
+        unsigned current_dist = (x - cx) + (cy - y);
+        unsigned corner_dist = (quad.corners[1].x - cx) + (cy - quad.corners[1].y);
+        if (current_dist > corner_dist) { quad.corners[1] = (struct gs_point){x, y}; }
+      }
+
+      // Bottom-right quadrant: maximize distance from center
+      if (x >= cx && y >= cy) {
+        unsigned current_dist = (x - cx) + (y - cy);
+        unsigned corner_dist = (quad.corners[2].x - cx) + (quad.corners[2].y - cy);
+        if (current_dist > corner_dist) { quad.corners[2] = (struct gs_point){x, y}; }
+      }
+
+      // Bottom-left quadrant: maximize distance from center
+      if (x <= cx && y >= cy) {
+        unsigned current_dist = (cx - x) + (y - cy);
+        unsigned corner_dist = (cx - quad.corners[3].x) + (quad.corners[3].y - cy);
+        if (current_dist > corner_dist) { quad.corners[3] = (struct gs_point){x, y}; }
+      }
+    }
+  }
+
+  return quad;
+}
+
+// Perspective correction using bilinear transformation
+GS_API void gs_perspective_correct(struct gs_image dst, struct gs_image src, struct gs_quad quad) {
+  gs_assert(gs_valid(dst) && gs_valid(src));
+
+  // Calculate transformation from dst coordinates to src quad coordinates
+  float w = dst.w - 1.0f;
+  float h = dst.h - 1.0f;
+
+  gs_for(dst, x, y) {
+    // Normalize destination coordinates to [0,1]
+    float u = x / w;
+    float v = y / h;
+
+    // Convert integer points to float for calculations
+    float p0x = quad.corners[0].x, p0y = quad.corners[0].y;  // Top-left
+    float p1x = quad.corners[1].x, p1y = quad.corners[1].y;  // Top-right
+    float p2x = quad.corners[2].x, p2y = quad.corners[2].y;  // Bottom-right
+    float p3x = quad.corners[3].x, p3y = quad.corners[3].y;  // Bottom-left
+
+    // Bilinear interpolation within the quad
+    float top_x = p0x * (1 - u) + p1x * u;
+    float top_y = p0y * (1 - u) + p1y * u;
+    float bot_x = p3x * (1 - u) + p2x * u;
+    float bot_y = p3y * (1 - u) + p2y * u;
+
+    float src_x = top_x * (1 - v) + bot_x * v;
+    float src_y = top_y * (1 - v) + bot_y * v;
+
+    // Clamp to source image bounds
+    src_x = GS_MAX(0.0f, GS_MIN(src_x, src.w - 1.0f));
+    src_y = GS_MAX(0.0f, GS_MIN(src_y, src.h - 1.0f));
+
+    // Bilinear sampling from source
+    unsigned sx_int = (unsigned)src_x, sy_int = (unsigned)src_y;
+    unsigned sx1 = GS_MIN(sx_int + 1, src.w - 1), sy1 = GS_MIN(sy_int + 1, src.h - 1);
+    float dx = src_x - sx_int, dy = src_y - sy_int;
+
+    uint8_t c00 = src.data[sy_int * src.w + sx_int];
+    uint8_t c01 = src.data[sy_int * src.w + sx1];
+    uint8_t c10 = src.data[sy1 * src.w + sx_int];
+    uint8_t c11 = src.data[sy1 * src.w + sx1];
+
+    dst.data[y * dst.w + x] = (uint8_t)((c00 * (1 - dx) * (1 - dy)) + (c01 * dx * (1 - dy)) +
+                                        (c10 * (1 - dx) * dy) + (c11 * dx * dy));
   }
 }
 
