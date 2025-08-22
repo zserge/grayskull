@@ -63,6 +63,7 @@ static void print_usage(const char* program_name) {
   printf("  adaptive <size> <constant>  Apply adaptive threshold\n");
   printf("  otsu                        Apply Otsu automatic thresholding\n");
   printf("  sobel                       Apply Sobel edge detection\n");
+  printf("  crop <x> <y> <w> <h>        Crop image to specified rectangle\n");
   printf("  erode                       Apply erosion morphology\n");
   printf("  dilate                      Apply dilation morphology\n");
   printf("  help                        Show this help message\n\n");
@@ -74,6 +75,7 @@ static void print_usage(const char* program_name) {
   printf("  %s adaptive 15 5 input.pgm adaptive.pgm\n", program_name);
   printf("  %s otsu input.pgm thresholded.pgm\n", program_name);
   printf("  %s sobel input.pgm edges.pgm\n", program_name);
+  printf("  %s crop 100 100 200 200 input.pgm cropped.pgm\n", program_name);
 }
 
 int main(int argc, char* argv[]) {
@@ -95,6 +97,8 @@ int main(int argc, char* argv[]) {
     expected_args = 3;  // program, command, input
   } else if (strcmp(command, "resize") == 0) {
     expected_args = 6;  // program, command, width, height, input, output
+  } else if (strcmp(command, "crop") == 0) {
+    expected_args = 8;  // program, command, x, y, width, height, input, output
   } else if (strcmp(command, "blur") == 0 || strcmp(command, "threshold") == 0) {
     expected_args = 5;  // program, command, param, input, output
   } else if (strcmp(command, "adaptive") == 0) {
@@ -185,6 +189,33 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     gs_resize(result, img);
+
+  } else if (strcmp(command, "crop") == 0) {
+    unsigned x = atoi(argv[2]);
+    unsigned y = atoi(argv[3]);
+    unsigned width = atoi(argv[4]);
+    unsigned height = atoi(argv[5]);
+
+    if (x + width > img.w || y + height > img.h) {
+      fprintf(stderr, "Error: Crop rectangle exceeds image bounds\n");
+      gs_free(img);
+      return 1;
+    }
+    if (width == 0 || height == 0) {
+      fprintf(stderr, "Error: Crop dimensions must be positive\n");
+      gs_free(img);
+      return 1;
+    }
+
+    printf("Cropping to %ux%u at (%u,%u)...\n", width, height, x, y);
+    result = gs_alloc(width, height);
+    if (!gs_valid(result)) {
+      fprintf(stderr, "Error: Could not allocate memory\n");
+      gs_free(img);
+      return 1;
+    }
+    struct gs_rect roi = {x, y, width, height};
+    gs_crop(result, img, roi);
 
   } else if (strcmp(command, "blur") == 0) {
     int radius = atoi(argv[2]);

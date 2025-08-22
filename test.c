@@ -194,38 +194,163 @@ static void test_otsu(void) {
 }
 
 static void test_adaptive_threshold(void) {
-#if 0
   uint8_t data[5 * 5] = {
-      10,  10,  200, 10,  10,   //
-      10,  10,  200, 10,  10,   //
-      10,  10,  200, 10,  10,   //
-      200, 200, 50,  200, 200,  //
-      200, 200, 50,  200, 200   //
+      50,  50,  200, 50,  50,   //
+      50,  50,  200, 50,  50,   //
+      50,  50,  200, 50,  50,   //
+      200, 200, 100, 200, 200,  //
+      200, 200, 100, 200, 200   //
+  };
+  uint8_t threshold[5 * 5] = {
+      0,   0,   255, 0,   0,    //
+      0,   0,   255, 0,   0,    //
+      0,   0,   255, 0,   0,    //
+      255, 255, 0,   255, 255,  //
+      0,   255, 0,   255, 0     //
+  };
+  uint8_t threshold_5[5 * 5] = {
+      255, 0,   255, 0,   255,  //
+      255, 0,   255, 0,   255,  //
+      0,   0,   255, 0,   0,    //
+      255, 255, 0,   255, 255,  //
+      255, 255, 0,   255, 255   //
   };
   struct gs_image src = {5, 5, data};
   uint8_t adaptive_data[5 * 5];
   struct gs_image dst = {5, 5, adaptive_data};
 
-  gs_adaptive_threshold(dst, src, 3, 5.f);
+  gs_adaptive_threshold(dst, src, 3, 0.0f);
+  for (unsigned i = 0; i < 25; i++) assert(dst.data[i] == threshold[i]);
 
-  printf("Adaptive threshold test:\n");
+  gs_adaptive_threshold(dst, src, 3, 5.0f);
+  for (unsigned i = 0; i < 25; i++) assert(dst.data[i] == threshold_5[i]);
+}
 
-  // Check that bright text in dark region becomes white
-  printf("  Bright text in dark region (2,1): %d (expected 255)\n", dst.data[1 * 5 + 2]);
-  assert(dst.data[1 * 5 + 2] == 255);
+static void test_connected_components(void) {
+  // Test case structure
+  struct {
+    const char* name;
+    unsigned w, h;
+    uint8_t* data;
+    int connectivity;  // 4 or 8
+    unsigned expected_components;
+    unsigned expected_areas[10];  // Component areas (0-terminated)
+  } test_cases[] = {{.name = "Simple 4-connectivity",
+                     .w = 5,
+                     .h = 3,
+                     .data =
+                         (uint8_t[]){
+                             0, 255, 0, 255, 0,  // Two isolated pixels
+                             0, 255, 0, 255, 0,  // Two 2x1 components
+                             0, 0, 0, 0, 0       //
+                         },
+                     .connectivity = 4,
+                     .expected_components = 2,
+                     .expected_areas = {2, 2, 0}},
+                    {.name = "Diagonal connection 4-connectivity",
+                     .w = 3,
+                     .h = 3,
+                     .data =
+                         (uint8_t[]){
+                             255, 0, 255,  // Should be 2 separate components in 4-connectivity
+                             0, 255, 0,    //
+                             255, 0, 255   //
+                         },
+                     .connectivity = 4,
+                     .expected_components = 5,  // All separate
+                     .expected_areas = {1, 1, 1, 1, 1, 0}},
+                    {.name = "Diagonal connection 8-connectivity",
+                     .w = 3,
+                     .h = 3,
+                     .data =
+                         (uint8_t[]){
+                             255, 0, 255,  // Should be 1 component in 8-connectivity
+                             0, 255, 0,    //
+                             255, 0, 255   //
+                         },
+                     .connectivity = 8,
+                     .expected_components = 1,
+                     .expected_areas = {5, 0}},
+                    {
+                        .name = "Complex shape",
+                        .w = 6,
+                        .h = 4,
+                        .data =
+                            (uint8_t[]){
+                                255, 255, 0,   0, 255, 0,    // L-shape + isolated pixel
+                                255, 0,   0,   0, 0,   0,    //
+                                255, 255, 255, 0, 255, 255,  // Connected to L + separate component
+                                0,   0,   0,   0, 255, 255   //
+                            },
+                        .connectivity = 4,
+                        .expected_components = 2,
+                        .expected_areas = {7, 4, 0}  // L-shape=7 pixels, rectangle=4 pixels
+                    }};
 
-  // Check that dark background in dark region becomes black
-  printf("  Dark background in dark region (0,0): %d (expected 0)\n", dst.data[0 * 5 + 0]);
-  assert(dst.data[0 * 5 + 0] == 0);
+  for (unsigned test = 0; test < sizeof(test_cases) / sizeof(test_cases[0]); test++) {
+    printf("Testing: %s\n", test_cases[test].name);
 
-  // Check that dark text in bright region becomes black
-  printf("  Dark text in bright region (2,3): %d (expected 0)\n", dst.data[3 * 5 + 2]);
-  assert(dst.data[3 * 5 + 2] == 0);
+    struct gs_image binary = {test_cases[test].w, test_cases[test].h, test_cases[test].data};
+    uint8_t* labels_data = calloc(binary.w * binary.h, 1);
+    struct gs_image labels = {binary.w, binary.h, labels_data};
 
-  // Check that bright background in bright region becomes white
-  printf("  Bright background in bright region (4,4): %d (expected 255)\n", dst.data[4 * 5 + 4]);
-  assert(dst.data[4 * 5 + 4] == 255);
-#endif
+    struct gs_component components[10];
+    unsigned num_components;
+
+    if (test_cases[test].connectivity == 8) {
+      num_components = gs_connected_components_ex(binary, labels, components, 10, 8);
+    } else {
+      num_components = gs_connected_components(binary, labels, components, 10);
+    }
+
+    printf("  Found %u components (expected %u)\n", num_components,
+           test_cases[test].expected_components);
+    assert(num_components == test_cases[test].expected_components);
+
+    // Check component areas
+    unsigned areas[10];
+    for (unsigned i = 0; i < num_components; i++) {
+      areas[i] = components[i].area;
+      printf("    Component %u: area=%u, bbox=(%u,%u,%ux%u)\n", i + 1, components[i].area,
+             components[i].bbox.x, components[i].bbox.y, components[i].bbox.w,
+             components[i].bbox.h);
+    }
+
+    // Sort areas for comparison
+    for (unsigned i = 0; i < num_components - 1; i++) {
+      for (unsigned j = i + 1; j < num_components; j++) {
+        if (areas[i] > areas[j]) {
+          unsigned temp = areas[i];
+          areas[i] = areas[j];
+          areas[j] = temp;
+        }
+      }
+    }
+
+    // Compare with expected areas (also sort expected)
+    unsigned expected[10];
+    unsigned expected_count = 0;
+    for (unsigned i = 0; test_cases[test].expected_areas[i] != 0; i++) {
+      expected[expected_count++] = test_cases[test].expected_areas[i];
+    }
+    for (unsigned i = 0; i < expected_count - 1; i++) {
+      for (unsigned j = i + 1; j < expected_count; j++) {
+        if (expected[i] > expected[j]) {
+          unsigned temp = expected[i];
+          expected[i] = expected[j];
+          expected[j] = temp;
+        }
+      }
+    }
+
+    for (unsigned i = 0; i < num_components; i++) {
+      printf("    Area %u: got=%u, expected=%u\n", i + 1, areas[i], expected[i]);
+      assert(areas[i] == expected[i]);
+    }
+
+    free(labels_data);
+    printf("  ✓ PASSED\n");
+  }
 }
 
 int main(void) {
@@ -238,6 +363,7 @@ int main(void) {
   test_otsu();
   test_morph();
   test_sobel();
+  test_connected_components();
   printf("All tests passed!\n");
   return 0;
 }

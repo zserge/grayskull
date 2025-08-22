@@ -175,28 +175,165 @@ GS_API void gs_sobel(struct gs_image dst, struct gs_image src) {
   }
 }
 
-// Simple contour detection - finds the largest connected component bounding box
-GS_API struct gs_rect gs_find_largest_contour(struct gs_image binary_img) {
-  gs_assert(gs_valid(binary_img));
+// Connected component structure
+struct gs_component {
+  unsigned label;
+  struct gs_rect bbox;
+  unsigned area;
+};
 
-  // Find bounding box of all white pixels
-  unsigned min_x = binary_img.w, max_x = 0;
-  unsigned min_y = binary_img.h, max_y = 0;
-  int found_pixels = 0;
+// Connected component labeling with connectivity option (4 or 8)
+GS_API unsigned gs_connected_components_ex(struct gs_image binary_img, struct gs_image labels,
+                                           struct gs_component *components, unsigned max_components,
+                                           int connectivity);
 
-  gs_for(binary_img, x, y) {
-    if (binary_img.data[y * binary_img.w + x] > 128) {  // White pixel
-      if (x < min_x) min_x = x;
-      if (x > max_x) max_x = x;
-      if (y < min_y) min_y = y;
-      if (y > max_y) max_y = y;
-      found_pixels = 1;
+// Connected component labeling using two-pass algorithm
+GS_API unsigned gs_connected_components(struct gs_image binary_img, struct gs_image labels,
+                                        struct gs_component *components, unsigned max_components) {
+  return gs_connected_components_ex(binary_img, labels, components, max_components,
+                                    0);  // 4-connectivity
+}
+
+// Extended connected components with connectivity option
+GS_API unsigned gs_connected_components_ex(struct gs_image binary_img, struct gs_image labels,
+                                           struct gs_component *components, unsigned max_components,
+                                           int connectivity) {
+  gs_assert(gs_valid(binary_img) && gs_valid(labels) && components && max_components > 0);
+  gs_assert(labels.w == binary_img.w && labels.h == binary_img.h);
+  gs_assert(connectivity == 4 || connectivity == 8 ||
+            connectivity == 0);  // 0 = default 4-connectivity
+
+  int conn = (connectivity == 8) ? 8 : 4;
+
+  // Clear labels image
+  for (unsigned i = 0; i < labels.w * labels.h; i++) labels.data[i] = 0;
+
+  // Union-find for label equivalences
+  unsigned next_label = 1;
+  unsigned equiv[max_components];
+  for (unsigned i = 0; i < max_components; i++) equiv[i] = i;
+
+  // First pass: assign provisional labels
+  for (unsigned y = 0; y < binary_img.h; y++) {
+    for (unsigned x = 0; x < binary_img.w; x++) {
+      if (binary_img.data[y * binary_img.w + x] > 128) {  // White pixel
+        unsigned neighbors[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        unsigned neighbor_count = 0;
+
+        // Check neighbors based on connectivity
+        if (conn == 4) {
+          // 4-connected neighbors (left, top)
+          if (x > 0 && labels.data[y * labels.w + (x - 1)] > 0)
+            neighbors[neighbor_count++] = labels.data[y * labels.w + (x - 1)];
+          if (y > 0 && labels.data[(y - 1) * labels.w + x] > 0)
+            neighbors[neighbor_count++] = labels.data[(y - 1) * labels.w + x];
+        } else {
+          // 8-connected neighbors
+          for (int dy = -1; dy <= 0; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+              if (dy == 0 && dx >= 0) break;  // Only check previous neighbors
+              int ny = (int)y + dy, nx = (int)x + dx;
+              if (ny >= 0 && nx >= 0 && nx < (int)labels.w && labels.data[ny * labels.w + nx] > 0) {
+                neighbors[neighbor_count++] = labels.data[ny * labels.w + nx];
+              }
+            }
+          }
+        }
+
+        if (neighbor_count == 0) {
+          // New component
+          if (next_label < max_components) { labels.data[y * labels.w + x] = next_label++; }
+        } else {
+          // Use minimum neighbor label
+          unsigned min_label = neighbors[0];
+          for (unsigned i = 1; i < neighbor_count; i++) {
+            if (neighbors[i] < min_label) min_label = neighbors[i];
+          }
+          labels.data[y * labels.w + x] = min_label;
+
+          // Record equivalences
+          for (unsigned i = 0; i < neighbor_count; i++) {
+            unsigned label = neighbors[i];
+            while (equiv[label] != label) label = equiv[label];
+            while (equiv[min_label] != equiv[min_label]) min_label = equiv[min_label];
+            if (label != min_label) {
+              if (label < min_label)
+                equiv[min_label] = label;
+              else
+                equiv[label] = min_label;
+            }
+          }
+        }
+      }
     }
   }
 
-  if (!found_pixels) return (struct gs_rect){0, 0, 0, 0};
+  // Second pass: resolve equivalences and compute component stats
+  unsigned component_count = 0;
+  unsigned label_map[max_components];
+  for (unsigned i = 0; i < max_components; i++) label_map[i] = 0;
 
-  return (struct gs_rect){min_x, min_y, max_x - min_x + 1, max_y - min_y + 1};
+  // Resolve equivalence chains
+  for (unsigned i = 1; i < next_label; i++) {
+    unsigned root = i;
+    while (equiv[root] != root) root = equiv[root];
+    equiv[i] = root;
+  }
+
+  // Create final label mapping
+  for (unsigned i = 1; i < next_label; i++) {
+    if (label_map[equiv[i]] == 0) {
+      label_map[equiv[i]] = ++component_count;
+      if (component_count < max_components) {
+        components[component_count - 1].label = component_count;
+        components[component_count - 1].area = 0;
+        components[component_count - 1].bbox = (struct gs_rect){binary_img.w, binary_img.h, 0, 0};
+      }
+    }
+  }
+
+  // Final pass: update labels and compute bounding boxes
+  gs_for(binary_img, x, y) {
+    unsigned label = labels.data[y * labels.w + x];
+    if (label > 0) {
+      unsigned final_label = label_map[equiv[label]];
+      labels.data[y * labels.w + x] = final_label;
+
+      if (final_label > 0 && final_label <= component_count) {
+        struct gs_component *comp = &components[final_label - 1];
+        comp->area++;
+        if (x < comp->bbox.x) comp->bbox.x = x;
+        if (y < comp->bbox.y) comp->bbox.y = y;
+        if (x >= comp->bbox.x + comp->bbox.w) comp->bbox.w = x - comp->bbox.x + 1;
+        if (y >= comp->bbox.y + comp->bbox.h) comp->bbox.h = y - comp->bbox.y + 1;
+      }
+    }
+  }
+
+  return component_count;
+}
+
+// Find largest connected component (for backward compatibility)
+// Note: This function requires a pre-allocated labels buffer of same size as binary_img
+GS_API struct gs_rect gs_find_largest_contour(struct gs_image binary_img,
+                                              struct gs_image labels_buffer) {
+  gs_assert(gs_valid(binary_img) && gs_valid(labels_buffer));
+  gs_assert(labels_buffer.w == binary_img.w && labels_buffer.h == binary_img.h);
+
+  struct gs_component components[256];
+  unsigned count = gs_connected_components(binary_img, labels_buffer, components, 256);
+
+  struct gs_rect largest = {0, 0, 0, 0};
+  unsigned max_area = 0;
+
+  for (unsigned i = 0; i < count; i++) {
+    if (components[i].area > max_area) {
+      max_area = components[i].area;
+      largest = components[i].bbox;
+    }
+  }
+
+  return largest;
 }
 
 // Convert rectangle to quadrilateral for perspective correction

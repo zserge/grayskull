@@ -1,4 +1,5 @@
 *.o
 *.dSYM
-test
-nanomagick
+/test
+/nanomagick
+/document_scanner
