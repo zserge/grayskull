@@ -227,129 +227,63 @@ static void test_adaptive_threshold(void) {
 }
 
 static void test_connected_components(void) {
-  // Test case structure
+  uint8_t test_data[6 * 5] = {
+      255, 255, 0,   0,   255, 0,    //
+      255, 0,   0,   255, 255, 0,    //
+      0,   0,   255, 255, 0,   0,    //
+      255, 0,   255, 0,   0,   255,  //
+      0,   255, 0,   0,   0,   255   //
+  };
+  struct gs_image binary = {6, 5, test_data};
+
+  // 4-point connectivity
+  uint8_t labels_data_4[6 * 5] = {0};
+  struct gs_image labels_4 = {binary.w, binary.h, labels_data_4};
+  struct gs_component components_4[10];
+  unsigned num_components_4 = gs_connected_components(binary, labels_4, components_4, 10, 0);
+  assert(num_components_4 == 5);
   struct {
-    const char* name;
-    unsigned w, h;
-    uint8_t* data;
-    int connectivity;  // 4 or 8
-    unsigned expected_components;
-    unsigned expected_areas[10];  // Component areas (0-terminated)
-  } test_cases[] = {{.name = "Simple 4-connectivity",
-                     .w = 5,
-                     .h = 3,
-                     .data =
-                         (uint8_t[]){
-                             0, 255, 0, 255, 0,  // Two isolated pixels
-                             0, 255, 0, 255, 0,  // Two 2x1 components
-                             0, 0, 0, 0, 0       //
-                         },
-                     .connectivity = 4,
-                     .expected_components = 2,
-                     .expected_areas = {2, 2, 0}},
-                    {.name = "Diagonal connection 4-connectivity",
-                     .w = 3,
-                     .h = 3,
-                     .data =
-                         (uint8_t[]){
-                             255, 0, 255,  // Should be 2 separate components in 4-connectivity
-                             0, 255, 0,    //
-                             255, 0, 255   //
-                         },
-                     .connectivity = 4,
-                     .expected_components = 5,  // All separate
-                     .expected_areas = {1, 1, 1, 1, 1, 0}},
-                    {.name = "Diagonal connection 8-connectivity",
-                     .w = 3,
-                     .h = 3,
-                     .data =
-                         (uint8_t[]){
-                             255, 0, 255,  // Should be 1 component in 8-connectivity
-                             0, 255, 0,    //
-                             255, 0, 255   //
-                         },
-                     .connectivity = 8,
-                     .expected_components = 1,
-                     .expected_areas = {5, 0}},
-                    {
-                        .name = "Complex shape",
-                        .w = 6,
-                        .h = 4,
-                        .data =
-                            (uint8_t[]){
-                                255, 255, 0,   0, 255, 0,    // L-shape + isolated pixel
-                                255, 0,   0,   0, 0,   0,    //
-                                255, 255, 255, 0, 255, 255,  // Connected to L + separate component
-                                0,   0,   0,   0, 255, 255   //
-                            },
-                        .connectivity = 4,
-                        .expected_components = 2,
-                        .expected_areas = {7, 4, 0}  // L-shape=7 pixels, rectangle=4 pixels
-                    }};
+    unsigned area;
+    struct gs_rect bbox;
+  } expected_components_4[] = {
+      {3, {0, 0, 2, 2}},  //
+      {6, {2, 0, 3, 4}},  //
+      {1, {0, 3, 1, 1}},  //
+      {2, {5, 3, 1, 2}},  //
+      {1, {1, 4, 1, 1}}   //
+  };
+  for (unsigned i = 0; i < num_components_4; i++) {
+    assert(components_4[i].label == i + 1);
+    assert(components_4[i].area == expected_components_4[i].area);
+    assert(components_4[i].bbox.x == expected_components_4[i].bbox.x);
+    assert(components_4[i].bbox.y == expected_components_4[i].bbox.y);
+    assert(components_4[i].bbox.w == expected_components_4[i].bbox.w);
+    assert(components_4[i].bbox.h == expected_components_4[i].bbox.h);
+  }
 
-  for (unsigned test = 0; test < sizeof(test_cases) / sizeof(test_cases[0]); test++) {
-    printf("Testing: %s\n", test_cases[test].name);
+  // 8-point connectivity
+  uint8_t labels_data_8[6 * 5] = {0};
+  struct gs_image labels_8 = {binary.w, binary.h, labels_data_8};
+  struct gs_component components_8[10];
+  unsigned num_components_8 = gs_connected_components(binary, labels_8, components_8, 10, 1);
+  assert(num_components_8 == 3);
 
-    struct gs_image binary = {test_cases[test].w, test_cases[test].h, test_cases[test].data};
-    uint8_t* labels_data = calloc(binary.w * binary.h, 1);
-    struct gs_image labels = {binary.w, binary.h, labels_data};
+  struct {
+    unsigned area;
+    struct gs_rect bbox;
+  } expected_components_8[] = {
+      {3, {0, 0, 2, 2}},  //
+      {8, {0, 0, 5, 5}},  //
+      {2, {5, 3, 1, 2}},  //
+  };
 
-    struct gs_component components[10];
-    unsigned num_components;
-
-    if (test_cases[test].connectivity == 8) {
-      num_components = gs_connected_components_ex(binary, labels, components, 10, 8);
-    } else {
-      num_components = gs_connected_components(binary, labels, components, 10);
-    }
-
-    printf("  Found %u components (expected %u)\n", num_components,
-           test_cases[test].expected_components);
-    assert(num_components == test_cases[test].expected_components);
-
-    // Check component areas
-    unsigned areas[10];
-    for (unsigned i = 0; i < num_components; i++) {
-      areas[i] = components[i].area;
-      printf("    Component %u: area=%u, bbox=(%u,%u,%ux%u)\n", i + 1, components[i].area,
-             components[i].bbox.x, components[i].bbox.y, components[i].bbox.w,
-             components[i].bbox.h);
-    }
-
-    // Sort areas for comparison
-    for (unsigned i = 0; i < num_components - 1; i++) {
-      for (unsigned j = i + 1; j < num_components; j++) {
-        if (areas[i] > areas[j]) {
-          unsigned temp = areas[i];
-          areas[i] = areas[j];
-          areas[j] = temp;
-        }
-      }
-    }
-
-    // Compare with expected areas (also sort expected)
-    unsigned expected[10];
-    unsigned expected_count = 0;
-    for (unsigned i = 0; test_cases[test].expected_areas[i] != 0; i++) {
-      expected[expected_count++] = test_cases[test].expected_areas[i];
-    }
-    for (unsigned i = 0; i < expected_count - 1; i++) {
-      for (unsigned j = i + 1; j < expected_count; j++) {
-        if (expected[i] > expected[j]) {
-          unsigned temp = expected[i];
-          expected[i] = expected[j];
-          expected[j] = temp;
-        }
-      }
-    }
-
-    for (unsigned i = 0; i < num_components; i++) {
-      printf("    Area %u: got=%u, expected=%u\n", i + 1, areas[i], expected[i]);
-      assert(areas[i] == expected[i]);
-    }
-
-    free(labels_data);
-    printf("  ✓ PASSED\n");
+  for (unsigned i = 0; i < num_components_8; i++) {
+    assert(components_8[i].label == i + 1);
+    assert(components_8[i].area == expected_components_8[i].area);
+    assert(components_8[i].bbox.x == expected_components_8[i].bbox.x);
+    assert(components_8[i].bbox.y == expected_components_8[i].bbox.y);
+    assert(components_8[i].bbox.w == expected_components_8[i].bbox.w);
+    assert(components_8[i].bbox.h == expected_components_8[i].bbox.h);
   }
 }
 
@@ -364,6 +298,5 @@ int main(void) {
   test_morph();
   test_sobel();
   test_connected_components();
-  printf("All tests passed!\n");
   return 0;
 }

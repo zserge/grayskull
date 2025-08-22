@@ -1,5 +1,6 @@
 *.o
 *.dSYM
+/out
 /test
 /nanomagick
 /document_scanner
