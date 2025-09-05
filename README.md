@@ -1,6 +1,6 @@
 # 🏰 Grayskull
 
-Grayskull is a minimalist, dependency-free alternative to OpenCV designed for microcontrollers and other resource-constrained devices. It focuses on grayscale images and provides modern, practical algorithms that fit in a few kilobytes of code. Single-header design, integer-based operations, pure C99.
+Grayskull is a minimalist, dependency-free alternative to OpenCV designed for microcontrollers and other resource-constrained devices. It focuses on **grayscale** images and provides modern, practical algorithms that fit in a few kilobytes of code. Single-header design, integer-based operations, pure C99.
 
 ## Features
 
