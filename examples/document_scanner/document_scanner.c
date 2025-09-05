@@ -41,11 +41,59 @@ int main(int argc, char* argv[]) {
   gs_write_pgm(edges, "debug_02_edges.pgm");
 #endif
 
-  printf("Step 3: Thresholding edges (Otsu)...\n");
-  uint8_t edge_threshold = gs_otsu_theshold(edges);
+  printf("Step 3: Multi-strategy thresholding...\n");
   struct gs_image binary_edges = gs_alloc(img.w, img.h);
+  struct gs_image binary_doc = gs_alloc(img.w, img.h);
+
+  // Strategy 1: Traditional edge-based approach
+  uint8_t otsu_thresh = gs_otsu_theshold(edges);
   gs_copy(binary_edges, edges);
-  gs_threshold(binary_edges, edge_threshold);
+  gs_threshold(binary_edges, otsu_thresh);
+
+  // Strategy 2: Document segmentation approach
+  // Apply adaptive threshold to original image to separate document from background
+  gs_adaptive_threshold(binary_doc, blurred, 21, 15);
+
+  // Find largest component in document segmentation
+  struct gs_image labels = gs_alloc(img.w, img.h);
+  struct gs_component components[256];
+  gs_label table[256];
+  unsigned count =
+      gs_connected_components(binary_doc, (gs_label*)labels.data, components, 256, table, 256, 0);
+
+  // If we found a large document region, use its bounding box
+  unsigned max_area = 0;
+  struct gs_rect doc_rect = {0, 0, 0, 0};
+  for (unsigned i = 0; i < count; i++) {
+    if (components[i].area > max_area) {
+      max_area = components[i].area;
+      doc_rect = components[i].box;
+    }
+  }
+
+  // If document region is significant (>10% of image), use it
+  if (max_area > (img.w * img.h) / 10) {
+    printf("  Found document region: %dx%d at (%d,%d)\n", doc_rect.w, doc_rect.h, doc_rect.x,
+           doc_rect.y);
+    // Create binary edges from document boundary
+    gs_for(binary_edges, x, y) binary_edges.data[y * binary_edges.w + x] = 0;
+    // Draw document boundary
+    for (unsigned x = doc_rect.x; x < doc_rect.x + doc_rect.w; x++) {
+      if (doc_rect.y < binary_edges.h) binary_edges.data[doc_rect.y * binary_edges.w + x] = 255;
+      if (doc_rect.y + doc_rect.h - 1 < binary_edges.h)
+        binary_edges.data[(doc_rect.y + doc_rect.h - 1) * binary_edges.w + x] = 255;
+    }
+    for (unsigned y = doc_rect.y; y < doc_rect.y + doc_rect.h; y++) {
+      if (doc_rect.x < binary_edges.w) binary_edges.data[y * binary_edges.w + doc_rect.x] = 255;
+      if (doc_rect.x + doc_rect.w - 1 < binary_edges.w)
+        binary_edges.data[y * binary_edges.w + (doc_rect.x + doc_rect.w - 1)] = 255;
+    }
+  } else {
+    printf("  Using edge-based approach (threshold=%d)\n", otsu_thresh);
+  }
+
+  gs_free(binary_doc);
+  gs_free(labels);
 
 #if DEBUG
   gs_write_pgm(binary_edges, "debug_03_binary_edges.pgm");

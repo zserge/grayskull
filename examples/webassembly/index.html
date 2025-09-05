@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Grayskull WASM Demo</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .controls,
+        .container {
+            display: flex;
+            justify-content: center;
+            margin: 10px 0;
+        }
+
+        video,
+        canvas {
+            border: 1px solid black;
+        }
+
+        .pipeline-controls {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 10px;
+        }
+
+        .pipeline-step {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .pipeline-step select,
+        .pipeline-step input {
+            margin: 0 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Grayskull WebAssembly Demo</h1>
+    <div class="controls">
+        <select id="cameraSelect"></select>
+        <button id="start">Start Camera</button>
+        <button id="stop" disabled>Stop Camera</button>
+    </div>
+    <div class="container">
+        <div>
+            <h3>Original</h3>
+            <video id="video" width="320" height="240" autoplay muted playsinline></video>
+        </div>
+        <div>
+            <h3>Processed</h3>
+            <canvas id="canvas" width="320" height="240"></canvas>
+        </div>
+    </div>
+    <div class="pipeline-controls">
+        <h3>Processing Pipeline</h3>
+        <div id="pipeline-steps"></div>
+        <button id="add-step">Add Step</button>
+    </div>
+    <script src="grayskull.js"></script>
+</body>
+
+</html>
