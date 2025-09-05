@@ -219,10 +219,10 @@ static void test_adaptive_threshold(void) {
   uint8_t adaptive_data[5 * 5];
   struct gs_image dst = {5, 5, adaptive_data};
 
-  gs_adaptive_threshold(dst, src, 3, 0.0f);
+  gs_adaptive_threshold(dst, src, 1, 0);
   for (unsigned i = 0; i < 25; i++) assert(dst.data[i] == threshold[i]);
 
-  gs_adaptive_threshold(dst, src, 3, 5.0f);
+  gs_adaptive_threshold(dst, src, 1, 5);
   for (unsigned i = 0; i < 25; i++) assert(dst.data[i] == threshold_5[i]);
 }
 
@@ -237,15 +237,13 @@ static void test_connected_components(void) {
   struct gs_image binary = {6, 5, test_data};
 
   // 4-point connectivity
-  uint8_t labels_data_4[6 * 5] = {0};
-  struct gs_image labels_4 = {binary.w, binary.h, labels_data_4};
+  gs_label labels_4[6 * 5] = {0};
+  gs_label table_4[256] = {0};
   struct gs_component components_4[10];
-  unsigned num_components_4 = gs_connected_components(binary, labels_4, components_4, 10, 0);
+  unsigned num_components_4 =
+      gs_connected_components(binary, labels_4, components_4, 10, table_4, 256, 0);
   assert(num_components_4 == 5);
-  struct {
-    unsigned area;
-    struct gs_rect bbox;
-  } expected_components_4[] = {
+  struct gs_component expected_components_4[] = {
       {3, {0, 0, 2, 2}},  //
       {6, {2, 0, 3, 4}},  //
       {1, {0, 3, 1, 1}},  //
@@ -253,37 +251,33 @@ static void test_connected_components(void) {
       {1, {1, 4, 1, 1}}   //
   };
   for (unsigned i = 0; i < num_components_4; i++) {
-    assert(components_4[i].label == i + 1);
     assert(components_4[i].area == expected_components_4[i].area);
-    assert(components_4[i].bbox.x == expected_components_4[i].bbox.x);
-    assert(components_4[i].bbox.y == expected_components_4[i].bbox.y);
-    assert(components_4[i].bbox.w == expected_components_4[i].bbox.w);
-    assert(components_4[i].bbox.h == expected_components_4[i].bbox.h);
+    assert(components_4[i].box.x == expected_components_4[i].box.x);
+    assert(components_4[i].box.y == expected_components_4[i].box.y);
+    assert(components_4[i].box.w == expected_components_4[i].box.w);
+    assert(components_4[i].box.h == expected_components_4[i].box.h);
   }
 
   // 8-point connectivity
-  uint8_t labels_data_8[6 * 5] = {0};
-  struct gs_image labels_8 = {binary.w, binary.h, labels_data_8};
+  gs_label labels_8[6 * 5] = {0}, table_8[256] = {0};
   struct gs_component components_8[10];
-  unsigned num_components_8 = gs_connected_components(binary, labels_8, components_8, 10, 1);
+  unsigned num_components_8 =
+      gs_connected_components(binary, labels_8, components_8, 10, table_8, 256, 1);
   assert(num_components_8 == 3);
 
-  struct {
-    unsigned area;
-    struct gs_rect bbox;
-  } expected_components_8[] = {
+  struct gs_component expected_components_8[] = {
       {3, {0, 0, 2, 2}},  //
       {8, {0, 0, 5, 5}},  //
       {2, {5, 3, 1, 2}},  //
   };
 
   for (unsigned i = 0; i < num_components_8; i++) {
-    assert(components_8[i].label == i + 1);
+    // Component label is now implicitly i+1 (array index + 1)
     assert(components_8[i].area == expected_components_8[i].area);
-    assert(components_8[i].bbox.x == expected_components_8[i].bbox.x);
-    assert(components_8[i].bbox.y == expected_components_8[i].bbox.y);
-    assert(components_8[i].bbox.w == expected_components_8[i].bbox.w);
-    assert(components_8[i].bbox.h == expected_components_8[i].bbox.h);
+    assert(components_8[i].box.x == expected_components_8[i].box.x);
+    assert(components_8[i].box.y == expected_components_8[i].box.y);
+    assert(components_8[i].box.w == expected_components_8[i].box.w);
+    assert(components_8[i].box.h == expected_components_8[i].box.h);
   }
 }
 
