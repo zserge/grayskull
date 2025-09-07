@@ -196,7 +196,6 @@ static inline void gs_morph(struct gs_image dst, struct gs_image src, int op) {
 GS_API void gs_erode(struct gs_image dst, struct gs_image src) { gs_morph(dst, src, GS_ERODE); }
 GS_API void gs_dilate(struct gs_image dst, struct gs_image src) { gs_morph(dst, src, GS_DILATE); }
 
-static inline int gs_abs(int x) { return (x < 0) ? -x : x; }
 GS_API void gs_sobel(struct gs_image dst, struct gs_image src) {
   gs_assert(gs_valid(dst) && gs_valid(src) && dst.w == src.w && dst.h == src.h);
   for (unsigned y = 1; y < src.h - 1; y++) {
@@ -207,7 +206,7 @@ GS_API void gs_sobel(struct gs_image dst, struct gs_image src) {
       int gy = -src.data[(y - 1) * src.w + (x - 1)] - 2 * src.data[(y - 1) * src.w + x] -
                src.data[(y - 1) * src.w + (x + 1)] + src.data[(y + 1) * src.w + (x - 1)] +
                2 * src.data[(y + 1) * src.w + x] + src.data[(y + 1) * src.w + (x + 1)];
-      int magnitude = (gs_abs(gx) + gs_abs(gy)) / 2;
+      int magnitude = ((gx < 0 ? -gx : gx) + (gy < 0 ? -gy : gy)) / 2;
       dst.data[y * dst.w + x] = (uint8_t)GS_MAX(0, GS_MIN(magnitude, 255));
     }
   }
