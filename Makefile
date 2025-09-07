@@ -1,4 +1,4 @@
-CFLAGS ?= -std=c99 -Wall -Wextra -pedantic -g
+CFLAGS ?= -std=c99 -Wall -Wextra -Werror -pedantic -g
 
 all: test nanomagick document_scanner aruco_detector
 

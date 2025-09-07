@@ -164,8 +164,8 @@ GS_API void gs_blur(struct gs_image dst, struct gs_image src, unsigned radius) {
     unsigned sum = 0, count = 0;
     for (int dy = -radius; dy <= (int)radius; dy++) {
       for (int dx = -radius; dx <= (int)radius; dx++) {
-        unsigned sy = y + dy, sx = x + dx;
-        if (sy >= 0 && sy < src.h && sx >= 0 && sx < src.w) {
+        int sy = y + dy, sx = x + dx;
+        if (sy >= 0 && sy < (int) src.h && sx >= 0 && sx < (int) src.w) {
           sum += src.data[sy * src.w + sx];
           count++;
         }
