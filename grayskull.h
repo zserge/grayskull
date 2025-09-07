@@ -285,7 +285,7 @@ GS_API unsigned gs_connected_components(struct gs_image img, gs_label *labels,
     gs_label comp_label = label_map[root];
     labels[y * img.w + x] = comp_label;
 
-    if (comp_label > 0 && (comp_label - 1) < comp_size) {
+    if (comp_label > 0 && (comp_label - 1) < (int) comp_size) {
       unsigned comp_idx = comp_label - 1;
       comp[comp_idx].area++;
       if (x < comp[comp_idx].box.x) comp[comp_idx].box.x = x;
