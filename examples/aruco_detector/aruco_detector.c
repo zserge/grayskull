@@ -108,8 +108,7 @@ static int is_roughly_square(struct gs_rect box, float tolerance) {
 }
 
 // Write a simple PPM (color) image for visualization
-static void write_ppm_colored_components(const char *filename, struct gs_image img,
-                                         gs_label *labels, unsigned num_components, unsigned w,
+static void write_ppm_colored_components(const char *filename, gs_label *labels, unsigned w,
                                          unsigned h) {
   FILE *f = fopen(filename, "wb");
   if (!f) return;
@@ -237,6 +236,7 @@ int main(int argc, char *argv[]) {
   struct gs_image edges = gs_alloc(img.w, img.h);
   struct gs_image binary = gs_alloc(img.w, img.h);
   struct gs_image marker_binary = {0, 0, NULL};  // Will be allocated later
+  gs_label *labels = NULL;
 
   if (!gs_valid(blurred) || !gs_valid(edges) || !gs_valid(binary)) {
     printf("Error: Memory allocation failed\n");
@@ -299,7 +299,7 @@ int main(int argc, char *argv[]) {
   }
 
   // 5. Connected component analysis on marker regions
-  gs_label *labels = calloc(1, img.w * img.h * sizeof(gs_label));
+  labels = calloc(1, img.w * img.h * sizeof(gs_label));
   struct gs_component components[1024];  // Increase from 256 to 1024
 
   // Use marker_binary for connected components if available, otherwise fall back to binary
@@ -319,8 +319,7 @@ int main(int argc, char *argv[]) {
     gs_write_pgm(label_1, filename);
   }
   // Create colored visualization of labeled components
-  write_ppm_colored_components("debug_05_components_colored.ppm", img, labels, num_components,
-                               img.w, img.h);
+  write_ppm_colored_components("debug_05_components_colored.ppm", labels, img.w, img.h);
   printf("Step 5c: Saved colored components visualization to debug_05_components_colored.ppm\n");
 
   // Debug: Check label distribution
