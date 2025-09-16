@@ -6,312 +6,196 @@
 
 #include "grayskull.h"
 
-// Terminal width detection
-static int get_terminal_width(void) {
-  struct winsize w;
-  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0) { return w.ws_col; }
-  return 80;  // default fallback
+static void identify(struct gs_image img, struct gs_image *out, char *argv[]) {
+  (void)out, (void)argv;
+  printf("Portable Graymap, %ux%u (%u) pixels\n", img.w, img.h, img.w * img.h);
 }
 
-// ASCII art rendering with Unicode block characters for better quality
-static void render_ascii_art(const struct gs_image img) {
-  int term_width = get_terminal_width();
-  int display_width = term_width - 2;  // Leave some margin
+static void view(struct gs_image img, struct gs_image *out, char *argv[]) {
+  (void)out, (void)argv;
 
-  // Calculate aspect ratio preserving height
-  int display_height =
-      (img.h * display_width) / (img.w * 2);  // *2 because chars are roughly 2x taller than wide
+  char *term = getenv("TERM");
+  int use_256 = term && strstr(term, "256color");
 
-  if (display_height > 50) {  // Limit height for terminal
-    display_height = 50;
-    display_width = (img.w * display_height * 2) / img.h;
-  }
-
-  printf("Displaying %ux%u image as %dx%d ASCII art:\n\n", img.w, img.h, display_width,
-         display_height);
-
-  // Unicode block characters for 4 gray levels (empty, light, medium, dark, full)
-  const char* blocks[] = {" ", "░", "▒", "▓", "█"};
-
-  for (int y = 0; y < display_height; y++) {
-    for (int x = 0; x < display_width; x++) {
-      // Map display coordinates to image coordinates
-      int img_x = (x * img.w) / display_width;
-      int img_y = (y * img.h) / display_height;
-
-      // Get pixel value and map to block character
-      uint8_t pixel = img.data[img_y * img.w + img_x];
-      int block_index = (pixel * 4) / 255;  // Map 0-255 to 0-4
-      if (block_index > 4) block_index = 4;
-
-      printf("%s", blocks[block_index]);
+  int term_width = 80;
+  struct winsize w;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0) { term_width = w.ws_col; }
+  int display_width = term_width - 2;  // some margin
+  int display_height = (img.h * display_width) / (img.w * (use_256 ? 1 : 2));
+  if (use_256) {
+    for (int y = 0; y < display_height; y += 2) {
+      for (int x = 0; x < display_width; x++) {
+        int ix = (x * img.w) / display_width;
+        int iy1 = (y * img.h) / display_height;
+        int iy2 = ((y + 1) * img.h) / display_height;
+        uint8_t p1 = img.data[iy1 * img.w + ix];
+        uint8_t p2 = (iy2 < (int)img.h) ? img.data[iy2 * img.w + ix] : p1;
+        int c1 = 232 + (p1 * 23) / 255;
+        int c2 = 232 + (p2 * 23) / 255;
+        printf("\x1b[38;5;%d;48;5;%dm▀", c1, c2);
+      }
+      printf("\x1b[0m\n");
     }
-    printf("\n");
+  } else {
+    const char *blocks[] = {" ", "░", "▒", "▓", "█"};
+    for (int y = 0; y < display_height; y++) {
+      for (int x = 0; x < display_width; x++) {
+        int img_x = (x * img.w) / display_width;
+        int img_y = (y * img.h) / display_height;
+        uint8_t pixel = img.data[img_y * img.w + img_x];
+        int block_index = (pixel * 4) / 255;  // Map 0-255 to 0-4
+        if (block_index > 4) block_index = 4;
+        printf("%s", blocks[block_index]);
+      }
+      printf("\n");
+    }
   }
   printf("\n");
 }
 
-static void print_usage(const char* program_name) {
-  printf("nanomagick - Simple PGM image processing tool\n");
-  printf("Usage: %s <command> [params] <input.pgm> <output.pgm>\n\n", program_name);
-  printf("Commands:\n");
-  printf("  identify <image.pgm>        Show image information\n");
-  printf("  view <image.pgm>            Display image as ASCII art\n");
-  printf("  resize <width> <height>     Resize image to width x height\n");
-  printf("  blur <radius>               Blur image with given radius\n");
-  printf("  threshold <value>           Apply global threshold (0-255)\n");
-  printf("  adaptive <size> <constant>  Apply adaptive threshold\n");
-  printf("  otsu                        Apply Otsu automatic thresholding\n");
-  printf("  sobel                       Apply Sobel edge detection\n");
-  printf("  crop <x> <y> <w> <h>        Crop image to specified rectangle\n");
-  printf("  erode                       Apply erosion morphology\n");
-  printf("  dilate                      Apply dilation morphology\n");
-  printf("  help                        Show this help message\n\n");
-  printf("Examples:\n");
-  printf("  %s identify image.pgm\n", program_name);
-  printf("  %s view image.pgm\n", program_name);
-  printf("  %s resize 640 480 input.pgm resized.pgm\n", program_name);
-  printf("  %s blur 3 input.pgm blurred.pgm\n", program_name);
-  printf("  %s adaptive 15 5 input.pgm adaptive.pgm\n", program_name);
-  printf("  %s otsu input.pgm thresholded.pgm\n", program_name);
-  printf("  %s sobel input.pgm edges.pgm\n", program_name);
-  printf("  %s crop 100 100 200 200 input.pgm cropped.pgm\n", program_name);
+static void resize(struct gs_image img, struct gs_image *out, char *argv[]) {
+  int w = atoi(argv[0]), h = atoi(argv[1]);
+  if (w <= 0 || h <= 0) {
+    fprintf(stderr, "Error: Invalid width or height\n");
+    return;
+  }
+  *out = gs_alloc(w, h);
+  gs_resize(*out, img);
 }
 
-int main(int argc, char* argv[]) {
-  if (argc < 2) {
-    print_usage(argv[0]);
+static void crop(struct gs_image img, struct gs_image *out, char *argv[]) {
+	int x = atoi(argv[0]), y = atoi(argv[1]), w = atoi(argv[2]), h = atoi(argv[3]);
+	if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > (int)img.w || y + h > (int)img.h) {
+		fprintf(stderr, "Error: Invalid crop rectangle\n");
+		return;
+	}
+	*out = gs_alloc(w, h);
+	gs_crop(*out, img, (struct gs_rect){x, y, w, h});
+}
+
+static void blur(struct gs_image img, struct gs_image *out, char *argv[]) {
+  int r = atoi(argv[0]);
+  if (r <= 0) {
+    fprintf(stderr, "Error: Invalid radius: %s\n", argv[0]);
+    return;
+  }
+  *out = gs_alloc(img.w, img.h);
+  gs_blur(*out, img, r);
+}
+
+static void threshold(struct gs_image img, struct gs_image *out, char *argv[]) {
+  int t = strcmp(argv[0], "otsu") == 0 ? gs_otsu_theshold(img) : atoi(argv[0]);
+  if (t <= 0) {
+    fprintf(stderr, "Error: Invalid threshold: %s\n", argv[0]);
+    return;
+  }
+  *out = gs_alloc(img.w, img.h);
+	gs_copy(*out, img);
+  gs_threshold(*out, t);
+}
+
+static void adaptive(struct gs_image img, struct gs_image *out, char *argv[]) {
+	int r = atoi(argv[0]), c = atoi(argv[1]);
+	if (r <= 0 || c < 0) {
+		fprintf(stderr, "Error: Invalid radius or constant\n");
+		return;
+	}
+	*out = gs_alloc(img.w, img.h);
+	gs_adaptive_threshold(*out, img, r, c);
+}
+
+static void morph(struct gs_image img, struct gs_image *out, char *argv[]) {
+	const char *op = argv[0];
+	int n = atoi(argv[1]);
+	if ((strcmp(op, "erode") != 0 && strcmp(op, "dilate") != 0) || n <= 0) {
+		fprintf(stderr, "Error: Invalid morphological operation or iterations\n");
+		return;
+	}
+	*out = gs_alloc(img.w, img.h);
+	struct gs_image temp = gs_alloc(img.w, img.h);
+	gs_copy(*out, img);
+	for (int i = 0; i < n; i++) {
+		if (strcmp(op, "erode") == 0) {
+			gs_erode(temp, *out);
+		} else if (strcmp(op, "dilate") == 0) {
+			gs_dilate(temp, *out);
+		} else {
+			fprintf(stderr, "Error: Unknown morphological operation: %s\n", op);
+			gs_free(temp);
+			gs_free(*out);
+			*out = (struct gs_image){0, 0, NULL};
+			return;
+		}
+		gs_copy(*out, temp);
+	}
+	gs_free(temp);
+}
+
+static void sobel(struct gs_image img, struct gs_image *out, char *argv[]) {
+	(void)argv;
+	*out = gs_alloc(img.w, img.h);
+	gs_sobel(*out, img);
+}
+
+struct cmd {
+  const char *name;
+  const char *help;
+  int argc;
+  int hasout;
+  void (*func)(struct gs_image img, struct gs_image *out, char *argv[]);
+} commands[] = {
+    {"identify", "          Show image information", 0, 0, identify},
+    {"view",     "              Display image in terminal", 0, 0, view},
+    {"resize",   "<w> <h>     Resize image to WxH", 2, 1, resize},
+		{"crop", "<x> <y> <w> <h>  Crop image to rectangle (x,y,w,h)", 4, 1, crop},
+    {"blur",     "<r>           Blur image with radius R", 1, 1, blur},
+    {"threshold", "<t>      Apply threshold (0-255 or otsu)", 1, 1, threshold},
+    {"adaptive",  "<r> <c>   Apply adaptive threshold with radius R and constant C", 2, 1, adaptive},
+		{"sobel",    "          Edge detection (Sobel)", 0, 1, sobel},
+		{"morph", "<op> <n>	 Morphological operation (erode/dilate) N times", 2, 1, morph},
+    {NULL, NULL, 0, 0, NULL},
+};
+
+static void usage(const char *app) {
+  printf("Usage: %s <command> [params] [input.pgm] [output.pgm]\n\n", app);
+  printf("Commands:\n");
+  for (struct cmd *cmd = commands; cmd->name != NULL; cmd++) printf("  %s %s\n", cmd->name, cmd->help);
+}
+
+int main(int argc, char *argv[]) {
+  if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+    usage(argv[0]);
     return 1;
   }
 
-  const char* command = argv[1];
-
-  if (strcmp(command, "help") == 0) {
-    print_usage(argv[0]);
-    return 0;
-  }
-
-  // Determine expected arguments based on command
-  int expected_args;
-  if (strcmp(command, "identify") == 0 || strcmp(command, "view") == 0) {
-    expected_args = 3;  // program, command, input
-  } else if (strcmp(command, "resize") == 0) {
-    expected_args = 6;  // program, command, width, height, input, output
-  } else if (strcmp(command, "crop") == 0) {
-    expected_args = 8;  // program, command, x, y, width, height, input, output
-  } else if (strcmp(command, "blur") == 0 || strcmp(command, "threshold") == 0) {
-    expected_args = 5;  // program, command, param, input, output
-  } else if (strcmp(command, "adaptive") == 0) {
-    expected_args = 6;  // program, command, size, constant, input, output
-  } else if (strcmp(command, "otsu") == 0 || strcmp(command, "sobel") == 0 ||
-             strcmp(command, "erode") == 0 || strcmp(command, "dilate") == 0) {
-    expected_args = 4;  // program, command, input, output
-  } else {
-    fprintf(stderr, "Error: Unknown command '%s'\n", command);
-    print_usage(argv[0]);
-    return 1;
-  }
-
-  if (argc != expected_args) {
-    fprintf(stderr, "Error: Wrong number of arguments for '%s'\n", command);
-    print_usage(argv[0]);
-    return 1;
-  }
-
-  // Get input and output files
-  const char* input_file;
-  const char* output_file = NULL;
-
-  if (strcmp(command, "identify") == 0 || strcmp(command, "view") == 0) {
-    input_file = argv[2];
-  } else {
-    input_file = argv[argc - 2];
-    output_file = argv[argc - 1];
-  }
-
-  // Load input image
-  printf("Loading %s...\n", input_file);
-  struct gs_image img = gs_read_pgm(input_file);
-  if (!gs_valid(img)) {
-    fprintf(stderr, "Error: Could not load %s\n", input_file);
-    return 1;
-  }
-  printf("Loaded %ux%u image\n", img.w, img.h);
-
-  // Handle identify and view commands (no output file needed)
-  if (strcmp(command, "identify") == 0) {
-    printf("Image: %s\n", input_file);
-    printf("Format: PGM (Portable Graymap)\n");
-    printf("Dimensions: %ux%u pixels\n", img.w, img.h);
-    printf("Type: Grayscale\n");
-    printf("File size: ");
-    FILE* f = fopen(input_file, "rb");
-    if (f) {
-      fseek(f, 0, SEEK_END);
-      long size = ftell(f);
-      fclose(f);
-      if (size < 1024) {
-        printf("%ld bytes\n", size);
-      } else if (size < 1024 * 1024) {
-        printf("%.1f KB\n", size / 1024.0);
-      } else {
-        printf("%.1f MB\n", size / (1024.0 * 1024.0));
+  for (struct cmd *cmd = commands; cmd->name != NULL; cmd++) {
+    if (strcmp(argv[1], cmd->name) != 0) continue;
+    // nanomagic <cmd> [params...] <input.pgm> [output.pgm]
+    if (argc != cmd->argc + cmd->hasout + 3) {
+      fprintf(stderr, "Error: Wrong number of arguments for '%s'\n", argv[1]);
+      usage(argv[0]);
+      return 1;
+    }
+    struct gs_image img = gs_read_pgm(argv[cmd->argc + 2]);
+    struct gs_image out = {0, 0, NULL};
+    cmd->func(img, &out, argv + 2);
+    if (cmd->hasout) {
+      if (!out.data) {
+        fprintf(stderr, "Error: Command '%s' did not produce output image\n", argv[1]);
+        gs_free(img);
+        return 1;
       }
-    } else {
-      printf("unknown\n");
+      if (gs_write_pgm(out, argv[cmd->argc + 3]) != 0) {
+        fprintf(stderr, "Error: Could not save %s\n", argv[cmd->argc + 3]);
+        gs_free(img);
+        gs_free(out);
+        return 1;
+      }
+      gs_free(out);
     }
     gs_free(img);
     return 0;
   }
-
-  if (strcmp(command, "view") == 0) {
-    render_ascii_art(img);
-    gs_free(img);
-    return 0;
-  }
-
-  struct gs_image result = {0, 0, NULL};
-
-  // Process based on command
-  if (strcmp(command, "resize") == 0) {
-    unsigned width = atoi(argv[2]);
-    unsigned height = atoi(argv[3]);
-    if (width == 0 || height == 0) {
-      fprintf(stderr, "Error: Invalid dimensions\n");
-      gs_free(img);
-      return 1;
-    }
-    printf("Resizing to %ux%u...\n", width, height);
-    result = gs_alloc(width, height);
-    if (!gs_valid(result)) {
-      fprintf(stderr, "Error: Could not allocate memory\n");
-      gs_free(img);
-      return 1;
-    }
-    gs_resize(result, img);
-
-  } else if (strcmp(command, "crop") == 0) {
-    unsigned x = atoi(argv[2]);
-    unsigned y = atoi(argv[3]);
-    unsigned width = atoi(argv[4]);
-    unsigned height = atoi(argv[5]);
-
-    if (x + width > img.w || y + height > img.h) {
-      fprintf(stderr, "Error: Crop rectangle exceeds image bounds\n");
-      gs_free(img);
-      return 1;
-    }
-    if (width == 0 || height == 0) {
-      fprintf(stderr, "Error: Crop dimensions must be positive\n");
-      gs_free(img);
-      return 1;
-    }
-
-    printf("Cropping to %ux%u at (%u,%u)...\n", width, height, x, y);
-    result = gs_alloc(width, height);
-    if (!gs_valid(result)) {
-      fprintf(stderr, "Error: Could not allocate memory\n");
-      gs_free(img);
-      return 1;
-    }
-    struct gs_rect roi = {x, y, width, height};
-    gs_crop(result, img, roi);
-
-  } else if (strcmp(command, "blur") == 0) {
-    int radius = atoi(argv[2]);
-    if (radius <= 0) {
-      fprintf(stderr, "Error: Blur radius must be positive\n");
-      gs_free(img);
-      return 1;
-    }
-    printf("Applying blur with radius %d...\n", radius);
-    result = gs_alloc(img.w, img.h);
-    if (!gs_valid(result)) {
-      fprintf(stderr, "Error: Could not allocate memory\n");
-      gs_free(img);
-      return 1;
-    }
-    gs_blur(result, img, radius);
-
-  } else if (strcmp(command, "threshold") == 0) {
-    int threshold_val = atoi(argv[2]);
-    if (threshold_val < 0 || threshold_val > 255) {
-      fprintf(stderr, "Error: Threshold must be 0-255\n");
-      gs_free(img);
-      return 1;
-    }
-    printf("Applying global threshold %d...\n", threshold_val);
-    result = img;  // Threshold operates in-place
-    gs_threshold(result, threshold_val);
-
-  } else if (strcmp(command, "adaptive") == 0) {
-    unsigned block_size = atoi(argv[2]);
-    float c = atof(argv[3]);
-    if (block_size == 0 || block_size % 2 == 0) {
-      fprintf(stderr, "Error: Block size must be odd and positive\n");
-      gs_free(img);
-      return 1;
-    }
-    printf("Applying adaptive threshold (block_size=%u, c=%.1f)...\n", block_size, c);
-    result = gs_alloc(img.w, img.h);
-    if (!gs_valid(result)) {
-      fprintf(stderr, "Error: Could not allocate memory\n");
-      gs_free(img);
-      return 1;
-    }
-    gs_adaptive_threshold(result, img, block_size, c);
-
-  } else if (strcmp(command, "otsu") == 0) {
-    uint8_t otsu_thresh = gs_otsu_theshold(img);
-    printf("Applying Otsu thresholding (threshold=%u)...\n", otsu_thresh);
-    result = img;  // Threshold operates in-place
-    gs_threshold(result, otsu_thresh);
-
-  } else if (strcmp(command, "sobel") == 0) {
-    printf("Applying Sobel edge detection...\n");
-    result = gs_alloc(img.w, img.h);
-    if (!gs_valid(result)) {
-      fprintf(stderr, "Error: Could not allocate memory\n");
-      gs_free(img);
-      return 1;
-    }
-    gs_sobel(result, img);
-
-  } else if (strcmp(command, "erode") == 0) {
-    printf("Applying erosion...\n");
-    result = gs_alloc(img.w, img.h);
-    if (!gs_valid(result)) {
-      fprintf(stderr, "Error: Could not allocate memory\n");
-      gs_free(img);
-      return 1;
-    }
-    gs_erode(result, img);
-
-  } else if (strcmp(command, "dilate") == 0) {
-    printf("Applying dilation...\n");
-    result = gs_alloc(img.w, img.h);
-    if (!gs_valid(result)) {
-      fprintf(stderr, "Error: Could not allocate memory\n");
-      gs_free(img);
-      return 1;
-    }
-    gs_dilate(result, img);
-  }
-
-  // Save result
-  printf("Saving to %s...\n", output_file);
-  if (gs_write_pgm(result, output_file) != 0) {
-    fprintf(stderr, "Error: Could not save %s\n", output_file);
-    gs_free(img);
-    if (result.data != img.data) gs_free(result);
-    return 1;
-  }
-
-  printf("Done!\n");
-
-  // Cleanup
-  gs_free(img);
-  if (result.data != img.data) gs_free(result);
-
-  return 0;
+  printf("Error: Unknown command '%s'\n", argv[1]);
+  return 1;
 }
