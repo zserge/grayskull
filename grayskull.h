@@ -1,6 +1,7 @@
 #ifndef GRAYSKULL_H
 #define GRAYSKULL_H
 
+#include <limits.h>
 #include <stdint.h>
 
 #ifndef GS_API
@@ -18,8 +19,18 @@ struct gs_rect {
   unsigned x, y, w, h;
 };
 
-struct gs_quad {
-  struct gs_point corners[4];  // nw, ne, se, sw
+typedef uint8_t gs_label;
+
+struct gs_blob {
+  gs_label label;
+  unsigned area;
+  struct gs_point tl, rb;
+};
+
+struct gs_contour {
+  struct gs_rect box;
+  struct gs_point start;
+  unsigned length;
 };
 
 struct gs_image {
@@ -51,7 +62,7 @@ GS_API void gs_free(struct gs_image img) { free(img.data); }
 
 GS_API struct gs_image gs_read_pgm(const char *path) {
   struct gs_image img = {0, 0, NULL};
-  FILE *f = fopen(path, "rb");
+  FILE *f = (path[0] == '-' && !path[1]) ? stdin : fopen(path, "rb");
   if (!f) return img;
   unsigned w, h, maxval;
   if (fscanf(f, "P5\n%u %u\n%u\n", &w, &h, &maxval) != 3 || maxval != 255) goto end;
@@ -68,7 +79,7 @@ end:
 
 GS_API int gs_write_pgm(struct gs_image img, const char *path) {
   if (!gs_valid(img)) return -1;
-  FILE *f = fopen(path, "wb");
+  FILE *f = (path[0] == '-' && !path[1]) ? stdout : fopen(path, "wb");
   if (!f) return -1;
   fprintf(f, "P5\n%u %u\n255\n", img.w, img.h);
   size_t written = fwrite(img.data, sizeof(uint8_t), img.w * img.h, f);
@@ -80,6 +91,10 @@ GS_API int gs_write_pgm(struct gs_image img, const char *path) {
 #define gs_for(img, x, y)                \
   for (unsigned y = 0; y < (img).h; y++) \
     for (unsigned x = 0; x < (img).w; x++)
+
+//
+// Image processing
+//
 
 GS_API void gs_crop(struct gs_image dst, struct gs_image src, struct gs_rect roi) {
   gs_assert(gs_valid(dst) && gs_valid(src) && roi.x + roi.w <= src.w && roi.y + roi.h <= src.h &&
@@ -165,7 +180,7 @@ GS_API void gs_blur(struct gs_image dst, struct gs_image src, unsigned radius) {
     for (int dy = -radius; dy <= (int)radius; dy++) {
       for (int dx = -radius; dx <= (int)radius; dx++) {
         int sy = y + dy, sx = x + dx;
-        if (sy >= 0 && sy < (int) src.h && sx >= 0 && sx < (int) src.w) {
+        if (sy >= 0 && sy < (int)src.h && sx >= 0 && sx < (int)src.w) {
           sum += src.data[sy * src.w + sx];
           count++;
         }
@@ -212,213 +227,133 @@ GS_API void gs_sobel(struct gs_image dst, struct gs_image src) {
   }
 }
 
-typedef uint16_t gs_label;
-struct gs_component {
-  unsigned area;
-  struct gs_rect box;
-};
-
-static inline gs_label gs_find_root(gs_label x, gs_label *table) {
-  if (table[x] != x) table[x] = gs_find_root(table[x], table);
-  return table[x];
+//
+// Connected components (blobs)
+//
+static inline gs_label gs_root(gs_label x, gs_label *parents) {
+  while (parents[x] != x) x = parents[x] = parents[parents[x]];
+  return x;
 }
 
-GS_API unsigned gs_connected_components(struct gs_image img, gs_label *labels,
-                                        struct gs_component *comp, unsigned comp_size,
-                                        gs_label *table, unsigned table_size, int fullconn) {
-  gs_assert(gs_valid(img) && labels != NULL);
-
-  gs_for(img, x, y) labels[y * img.w + x] = 0;
-  for (unsigned i = 0; i < table_size; i++) table[i] = i;
-  unsigned nextlbl = 1;
-
+GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *blobs,
+                         unsigned nblobs) {
+  gs_assert(gs_valid(img) && labels != NULL && blobs != NULL && nblobs > 0);
+  unsigned w = img.w;
+  gs_label next = 1, parents[nblobs + 1];
+  for (unsigned i = 0; i < img.w * img.h; i++) labels[i] = 0;
+  for (unsigned i = 0; i < nblobs; i++)
+    blobs[i] = (struct gs_blob){0, 0, {UINT_MAX, UINT_MAX}, {0, 0}};
+  for (unsigned i = 0; i <= nblobs; i++) parents[i] = i;
+  // first pass: label and union
   gs_for(img, x, y) {
-    if (!img.data[y * img.w + x]) continue;
-    static const int dx[] = {-1, 0, -1, 1};
-    static const int dy[] = {0, -1, -1, -1};
-    gs_label neighbors[4];
-    int neighbor_count = 0;
-
-    for (int i = 0; i < (fullconn ? 4 : 2); i++) {
-      int nx = x + dx[i], ny = y + dy[i];
-      if (ny < 0 || ny >= (int)img.h || nx < 0 || nx >= (int)img.w) continue;
-      gs_label nl = labels[ny * img.w + nx];
-      if (nl) neighbors[neighbor_count++] = nl;
-    }
-
-    if (neighbor_count == 0) {
-      gs_assert(nextlbl < table_size);
-      labels[y * img.w + x] = nextlbl++;
-    } else {
-      labels[y * img.w + x] = neighbors[0];
-      for (int i = 1; i < neighbor_count; i++) {
-        gs_label root_a = gs_find_root(neighbors[0], table);
-        gs_label root_b = gs_find_root(neighbors[i], table);
-        if (root_a != root_b) {
-          if (root_a < root_b)
-            table[root_b] = root_a;
-          else
-            table[root_a] = root_b;
-        }
+    if (img.data[y * w + x] < 128) continue;  // skip background pixels
+    gs_label left = (x > 0) ? labels[y * w + (x - 1)] : 0;
+    gs_label top = (y > 0) ? labels[(y - 1) * w + x] : 0;
+    // 4-connectivity: pick smallest from left and top, if any is non-zero
+    gs_label n = (left && top ? GS_MIN(left, top) : (left ? left : (top ? top : 0)));
+    if (!n) {                       // new component
+      if (next > nblobs) continue;  // out of labels
+      blobs[next - 1] = (struct gs_blob){next, 1, {x, y}, {x, y}};
+      labels[y * w + x] = next++;
+    } else {  // existing component
+      labels[y * w + x] = n;
+      struct gs_blob *b = &blobs[n - 1];
+      b->area++;
+      b->tl.x = GS_MIN(x, b->tl.x), b->tl.y = GS_MIN(y, b->tl.y);
+      b->rb.x = GS_MAX(x, b->rb.x), b->rb.y = GS_MAX(y, b->rb.y);
+      // union if labels are different
+      if (left && top && left != top) {
+        gs_label root1 = gs_root(left, parents), root2 = gs_root(top, parents);
+        if (root1 != root2) parents[GS_MAX(root1, root2)] = GS_MIN(root1, root2);
       }
     }
   }
-
-  gs_label label_map[table_size];
-  for (unsigned i = 0; i < table_size; i++) label_map[i] = 0;
-
-  unsigned comp_count = 0;
-  for (unsigned lbl = 1; lbl < nextlbl; lbl++) {
-    gs_label root = gs_find_root(lbl, table);
-    if (label_map[root] == 0) { label_map[root] = ++comp_count; }
+  // merge blobs
+  for (unsigned i = 0; i < next - 1; i++) {
+    gs_label root = gs_root(blobs[i].label, parents);
+    if (root != blobs[i].label) {
+      struct gs_blob *broot = &blobs[root - 1];
+      broot->area += blobs[i].area;
+      broot->tl.x = GS_MIN(broot->tl.x, blobs[i].tl.x);
+      broot->tl.y = GS_MIN(broot->tl.y, blobs[i].tl.y);
+      broot->rb.x = GS_MAX(broot->rb.x, blobs[i].rb.x);
+      broot->rb.y = GS_MAX(broot->rb.y, blobs[i].rb.y);
+      blobs[i].area = 0;
+    }
   }
-
-  for (unsigned i = 0; i < comp_count && i < comp_size; i++) {
-    comp[i] = (struct gs_component){0, {UINT32_MAX, UINT32_MAX, 0, 0}};
-  }
-
+  // second pass: update labels
   gs_for(img, x, y) {
-    if (!img.data[y * img.w + x]) continue;
-    gs_label lbl = labels[y * img.w + x];
-    gs_label root = gs_find_root(lbl, table);
-    gs_label comp_label = label_map[root];
-    labels[y * img.w + x] = comp_label;
-
-    if (comp_label > 0 && (comp_label - 1) < (int) comp_size) {
-      unsigned comp_idx = comp_label - 1;
-      comp[comp_idx].area++;
-      if (x < comp[comp_idx].box.x) comp[comp_idx].box.x = x;
-      if (y < comp[comp_idx].box.y) comp[comp_idx].box.y = y;
-      if (x > comp[comp_idx].box.w) comp[comp_idx].box.w = x;  // max x, convert to w later
-      if (y > comp[comp_idx].box.h) comp[comp_idx].box.h = y;  // max y, convert to h later
-    }
+    gs_label l = labels[y * w + x];
+    if (l) labels[y * w + x] = gs_root(l, parents);
   }
 
-  for (unsigned i = 0; i < comp_count && i < comp_size; i++) {
-    if (comp[i].area > 0) {
-      unsigned min_x = comp[i].box.x;
-      unsigned min_y = comp[i].box.y;
-      unsigned max_x = comp[i].box.w;
-      unsigned max_y = comp[i].box.h;
-      comp[i].box.x = min_x;
-      comp[i].box.y = min_y;
-      comp[i].box.w = max_x - min_x + 1;
-      comp[i].box.h = max_y - min_y + 1;
-    }
+  // compact blobs
+  unsigned m = 0;
+  for (unsigned i = 0; i < next - 1; i++) {
+    if (blobs[i].area == 0) continue;
+    blobs[m] = blobs[i], blobs[m].label = m + 1, m++;
   }
 
-  return comp_count;
+  return m;  // number of non-empty blobs
 }
 
-GS_API struct gs_rect gs_find_largest_contour(struct gs_image binary_img,
-                                              struct gs_image labels_buffer) {
-  gs_assert(gs_valid(binary_img) && gs_valid(labels_buffer));
-  gs_assert(labels_buffer.w == binary_img.w && labels_buffer.h == binary_img.h);
-
-  struct gs_component components[256];
-  gs_label table[256];
-  unsigned count = gs_connected_components(binary_img, (gs_label *)labels_buffer.data, components,
-                                           256, table, 256, 0);
-
-  struct gs_rect largest = {0, 0, 0, 0};
-  unsigned max_area = 0;
-
-  for (unsigned i = 0; i < count; i++) {
-    if (components[i].area > max_area) {
-      max_area = components[i].area;
-      largest = components[i].box;
-    }
-  }
-
-  return largest;
-}
-
-// Convert rectangle to quadrilateral for perspective correction
-GS_API struct gs_quad gs_rect_to_quad(struct gs_rect rect) {
-  struct gs_quad quad;
-  quad.corners[0] = (struct gs_point){rect.x, rect.y};
-  quad.corners[1] = (struct gs_point){rect.x + rect.w - 1, rect.y};
-  quad.corners[2] = (struct gs_point){rect.x + rect.w - 1, rect.y + rect.h - 1};
-  quad.corners[3] = (struct gs_point){rect.x, rect.y + rect.h - 1};
-  return quad;
-}
-
-GS_API struct gs_quad gs_find_document_corners(struct gs_image binary_edges) {
-  gs_assert(gs_valid(binary_edges));
-
-  unsigned cx = binary_edges.w / 2;
-  unsigned cy = binary_edges.h / 2;
-
-  struct gs_quad quad;
-  quad.corners[0] = (struct gs_point){cx, cy};
-  quad.corners[1] = (struct gs_point){cx, cy};
-  quad.corners[2] = (struct gs_point){cx, cy};
-  quad.corners[3] = (struct gs_point){cx, cy};
-
-  gs_for(binary_edges, x, y) {
-    if (binary_edges.data[y * binary_edges.w + x] > 128) {
-      if (x <= cx && y <= cy) {
-        unsigned current_dist = (cx - x) + (cy - y);
-        unsigned corner_dist = (cx - quad.corners[0].x) + (cy - quad.corners[0].y);
-        if (current_dist > corner_dist) { quad.corners[0] = (struct gs_point){x, y}; }
-      }
-      if (x >= cx && y <= cy) {
-        unsigned current_dist = (x - cx) + (cy - y);
-        unsigned corner_dist = (quad.corners[1].x - cx) + (cy - quad.corners[1].y);
-        if (current_dist > corner_dist) { quad.corners[1] = (struct gs_point){x, y}; }
-      }
-      if (x >= cx && y >= cy) {
-        unsigned current_dist = (x - cx) + (y - cy);
-        unsigned corner_dist = (quad.corners[2].x - cx) + (quad.corners[2].y - cy);
-        if (current_dist > corner_dist) { quad.corners[2] = (struct gs_point){x, y}; }
-      }
-      if (x <= cx && y >= cy) {
-        unsigned current_dist = (cx - x) + (y - cy);
-        unsigned corner_dist = (cx - quad.corners[3].x) + (quad.corners[3].y - cy);
-        if (current_dist > corner_dist) { quad.corners[3] = (struct gs_point){x, y}; }
-      }
-    }
-  }
-  return quad;
-}
-
-GS_API void gs_perspective_correct(struct gs_image dst, struct gs_image src, struct gs_quad quad) {
+GS_API void gs_perspective_correct(struct gs_image dst, struct gs_image src, struct gs_point c[4]) {
   gs_assert(gs_valid(dst) && gs_valid(src));
-
-  float w = dst.w - 1.0f;
-  float h = dst.h - 1.0f;
-
+  float w = dst.w - 1.0f, h = dst.h - 1.0f;
   gs_for(dst, x, y) {
-    float u = x / w;
-    float v = y / h;
-
-    float p0x = quad.corners[0].x, p0y = quad.corners[0].y;
-    float p1x = quad.corners[1].x, p1y = quad.corners[1].y;
-    float p2x = quad.corners[2].x, p2y = quad.corners[2].y;
-    float p3x = quad.corners[3].x, p3y = quad.corners[3].y;
-
-    float top_x = p0x * (1 - u) + p1x * u;
-    float top_y = p0y * (1 - u) + p1y * u;
-    float bot_x = p3x * (1 - u) + p2x * u;
-    float bot_y = p3y * (1 - u) + p2y * u;
-
+    float u = x / w, v = y / h;
+    float top_x = c[0].x * (1 - u) + c[1].x * u;
+    float top_y = c[0].y * (1 - u) + c[1].y * u;
+    float bot_x = c[3].x * (1 - u) + c[2].x * u;
+    float bot_y = c[3].y * (1 - u) + c[2].y * u;
     float src_x = top_x * (1 - v) + bot_x * v;
     float src_y = top_y * (1 - v) + bot_y * v;
-
     src_x = GS_MAX(0.0f, GS_MIN(src_x, src.w - 1.0f));
     src_y = GS_MAX(0.0f, GS_MIN(src_y, src.h - 1.0f));
-
-    unsigned sx_int = (unsigned)src_x, sy_int = (unsigned)src_y;
-    unsigned sx1 = GS_MIN(sx_int + 1, src.w - 1), sy1 = GS_MIN(sy_int + 1, src.h - 1);
-    float dx = src_x - sx_int, dy = src_y - sy_int;
-
-    uint8_t c00 = src.data[sy_int * src.w + sx_int];
-    uint8_t c01 = src.data[sy_int * src.w + sx1];
-    uint8_t c10 = src.data[sy1 * src.w + sx_int];
-    uint8_t c11 = src.data[sy1 * src.w + sx1];
-
+    unsigned sx = (unsigned)src_x, sy = (unsigned)src_y;
+    unsigned sx1 = GS_MIN(sx + 1, src.w - 1), sy1 = GS_MIN(sy + 1, src.h - 1);
+    float dx = src_x - sx, dy = src_y - sy;
+    uint8_t c00 = src.data[sy * src.w + sx], c01 = src.data[sy * src.w + sx1],
+            c10 = src.data[sy1 * src.w + sx], c11 = src.data[sy1 * src.w + sx1];
     dst.data[y * dst.w + x] = (uint8_t)((c00 * (1 - dx) * (1 - dy)) + (c01 * dx * (1 - dy)) +
                                         (c10 * (1 - dx) * dy) + (c11 * dx * dy));
+  }
+}
+
+GS_API void gs_trace_contour(struct gs_image img, struct gs_image visited, struct gs_contour *c) {
+  gs_assert(gs_valid(img) && gs_valid(visited) && img.w == visited.w && img.h == visited.h);
+  static const int dx[] = {1, 1, 0, -1, -1, -1, 0, 1};
+  static const int dy[] = {0, 1, 1, 1, 0, -1, -1, -1};
+
+  c->length = 0;
+  c->box = (struct gs_rect){c->start.x, c->start.y, 1, 1};
+
+  struct gs_point p = c->start;
+  unsigned dir = 7, seenstart = 0;
+
+  for (;;) {
+    if (!visited.data[p.y * visited.w + p.x]) c->length++;
+    visited.data[p.y * visited.w + p.x] = 255;
+    int ndir = (dir + 1) % 8, found = 0;
+    for (int i = 0; i < 8; i++) {
+      int d = (ndir + i) % 8, nx = p.x + dx[d], ny = p.y + dy[d];
+      if (nx >= 0 && nx < (int)img.w && ny >= 0 && ny < (int)img.h &&
+          img.data[ny * img.w + nx] > 128) {
+        p = (struct gs_point){nx, ny};
+        dir = (d + 6) % 8;
+        found = 1;
+        break;
+      }
+    }
+    if (!found) break;  // open contour
+    c->box.x = GS_MIN(c->box.x, p.x);
+    c->box.y = GS_MIN(c->box.y, p.y);
+    c->box.w = GS_MAX(c->box.w, p.x - c->box.x + 1);
+    c->box.h = GS_MAX(c->box.h, p.y - c->box.y + 1);
+    if (p.x == c->start.x && p.y == c->start.y) {
+      if (seenstart) break;  // stop: second time at the starting point
+      seenstart = 1;
+    }
   }
 }
 #endif  // GRAYSKULL_H
