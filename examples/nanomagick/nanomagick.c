@@ -156,8 +156,9 @@ static void blobs(struct gs_image img, struct gs_image *out, char *argv[]) {
   }
   unsigned nblobs = gs_blobs(img, labels, blobs, n);
   for (unsigned i = 0; i < nblobs; i++) {
-    unsigned x1 = GS_MAX(0, (int)blobs[i].tl.x - 2), y1 = GS_MAX(0, (int)blobs[i].tl.y - 2);
-    unsigned x2 = GS_MIN(img.w, blobs[i].rb.x + 2), y2 = GS_MIN(img.h, blobs[i].rb.y + 2);
+    unsigned x1 = GS_MAX(0, (int)blobs[i].box.x - 2), y1 = GS_MAX(0, (int)blobs[i].box.y - 2);
+    unsigned x2 = GS_MIN(img.w, blobs[i].box.x + blobs[i].box.w + 2),
+             y2 = GS_MIN(img.h, blobs[i].box.y + blobs[i].box.h + 2);
     for (unsigned y = y1; y <= y2; y++) {
       for (unsigned x = x1; x <= x2; x++) { out->data[y * out->w + x] = 128; }
     }

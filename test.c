@@ -243,16 +243,19 @@ static void test_blobs(void) {
   unsigned n = gs_blobs(img, labels, blobs, 10);
   assert(n == 3);
   struct gs_blob expected[] = {
-      {1, 3, {0, 0}, {1, 1}},  //
-      {2, 9, {0, 0}, {4, 4}},  //
-      {3, 2, {5, 3}, {5, 4}}   //
+      {1, 3, {0, 0, 2, 2}, {1, 1}},  //
+      {2, 9, {0, 0, 5, 5}, {4, 4}},  //
+      {3, 2, {5, 3, 1, 2}, {5, 4}}   //
   };
   (void)expected;
   for (unsigned i = 0; i < n; i++) {
+    printf("Blob %d: label=%d, area=%d, box=(%d,%d,%d,%d), centroid=(%u,%u)\n", i, blobs[i].label,
+           blobs[i].area, blobs[i].box.x, blobs[i].box.y, blobs[i].box.w, blobs[i].box.h,
+           blobs[i].centroid.x, blobs[i].centroid.y);
     assert(blobs[i].label == expected[i].label);
     assert(blobs[i].area == expected[i].area);
-    assert(blobs[i].tl.x == expected[i].tl.x && blobs[i].tl.y == expected[i].tl.y);
-    assert(blobs[i].rb.x == expected[i].rb.x && blobs[i].rb.y == expected[i].rb.y);
+    assert(blobs[i].box.x == expected[i].box.x && blobs[i].box.y == expected[i].box.y);
+    assert(blobs[i].box.w == expected[i].box.w && blobs[i].box.h == expected[i].box.h);
   }
 }
 
@@ -282,17 +285,6 @@ static void test_trace_contour(void) {
   gs_for(visited, x, y) {
     assert(visited.data[y * visited.w + x] == expected_visisted_data[y * visited.w + x]);
   }
-}
-
-static void test_find_contours(void) {
-  uint8_t data[7 * 7] = {0, W, W, 0, 0, W, 0, 0, W, 0, 0, W, W, W, 0, 0, 0, 0, W, W, 0, 0, W, W, 0,
-                         W, W, W, 0, W, W, 0, W, W, W, 0, 0, 0, 0, W, W, 0, 0, 0, W, 0, 0, W, 0};
-  uint8_t visdata[7 * 7] = {0};
-  struct gs_image img = {7, 7, data};
-  struct gs_image visited = {7, 7, visdata};
-  struct gs_contour contours[10] = {0};
-  unsigned n = gs_find_contours(img, visited, contours, 10);
-  printf("n = %u\n", n);
 }
 
 int main(void) {

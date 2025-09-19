@@ -24,7 +24,8 @@ typedef uint8_t gs_label;
 struct gs_blob {
   gs_label label;
   unsigned area;
-  struct gs_point tl, rb;
+  struct gs_rect box;
+  struct gs_point centroid;
 };
 
 struct gs_contour {
@@ -242,7 +243,7 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
   gs_label next = 1, parents[nblobs + 1];
   for (unsigned i = 0; i < img.w * img.h; i++) labels[i] = 0;
   for (unsigned i = 0; i < nblobs; i++)
-    blobs[i] = (struct gs_blob){0, 0, {UINT_MAX, UINT_MAX}, {0, 0}};
+    blobs[i] = (struct gs_blob){0, 0, {UINT_MAX, UINT_MAX, 0, 0}, {0, 0}};
   for (unsigned i = 0; i <= nblobs; i++) parents[i] = i;
   // first pass: label and union
   gs_for(img, x, y) {
@@ -253,14 +254,15 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
     gs_label n = (left && top ? GS_MIN(left, top) : (left ? left : (top ? top : 0)));
     if (!n) {                       // new component
       if (next > nblobs) continue;  // out of labels
-      blobs[next - 1] = (struct gs_blob){next, 1, {x, y}, {x, y}};
+      blobs[next - 1] = (struct gs_blob){next, 1, {x, y, 1, 1}, {x, y}};
       labels[y * w + x] = next++;
     } else {  // existing component
       labels[y * w + x] = n;
       struct gs_blob *b = &blobs[n - 1];
       b->area++;
-      b->tl.x = GS_MIN(x, b->tl.x), b->tl.y = GS_MIN(y, b->tl.y);
-      b->rb.x = GS_MAX(x, b->rb.x), b->rb.y = GS_MAX(y, b->rb.y);
+      b->box.x = GS_MIN(x, b->box.x), b->box.y = GS_MIN(y, b->box.y);
+      // keep bottom-right point coordinates in w/h of the rect, adjust later
+      b->box.w = GS_MAX(x, b->box.w), b->box.h = GS_MAX(y, b->box.h);
       // union if labels are different
       if (left && top && left != top) {
         gs_label root1 = gs_root(left, parents), root2 = gs_root(top, parents);
@@ -274,10 +276,10 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
     if (root != blobs[i].label) {
       struct gs_blob *broot = &blobs[root - 1];
       broot->area += blobs[i].area;
-      broot->tl.x = GS_MIN(broot->tl.x, blobs[i].tl.x);
-      broot->tl.y = GS_MIN(broot->tl.y, blobs[i].tl.y);
-      broot->rb.x = GS_MAX(broot->rb.x, blobs[i].rb.x);
-      broot->rb.y = GS_MAX(broot->rb.y, blobs[i].rb.y);
+      broot->box.x = GS_MIN(broot->box.x, blobs[i].box.x);
+      broot->box.y = GS_MIN(broot->box.y, blobs[i].box.y);
+      broot->box.w = GS_MAX(broot->box.w, blobs[i].box.w);
+      broot->box.h = GS_MAX(broot->box.h, blobs[i].box.h);
       blobs[i].area = 0;
     }
   }
@@ -291,6 +293,9 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
   unsigned m = 0;
   for (unsigned i = 0; i < next - 1; i++) {
     if (blobs[i].area == 0) continue;
+    // fix rect width/height from bottom-right point to actual width/height
+    blobs[i].box.w = blobs[i].box.w - blobs[i].box.x + 1;
+    blobs[i].box.h = blobs[i].box.h - blobs[i].box.y + 1;
     blobs[m] = blobs[i], blobs[m].label = m + 1, m++;
   }
 
