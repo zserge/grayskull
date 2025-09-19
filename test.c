@@ -67,11 +67,13 @@ static void test_resize(void) {
   }
 }
 
+#define W 255  // use one-letter define to align with "0" for black
+
 static void test_blur(void) {
   uint8_t data[3 * 3] = {
-      0, 0,   0,  //
-      0, 255, 0,  //
-      0, 0,   0   //
+      0, 0, 0,  //
+      0, W, 0,  //
+      0, 0, 0   //
   };
   struct gs_image src = {3, 3, data};
   uint8_t blurred_data[3 * 3];
@@ -85,11 +87,11 @@ static void test_blur(void) {
 
 static void test_morph(void) {
   uint8_t data_erode[5 * 5] = {
-      0, 0,   0,   0,   0,  //
-      0, 255, 255, 255, 0,  //
-      0, 255, 255, 255, 0,  //
-      0, 255, 255, 255, 0,  //
-      0, 0,   0,   0,   0   //
+      0, 0, 0, 0, 0,  //
+      0, W, W, W, 0,  //
+      0, W, W, W, 0,  //
+      0, W, W, W, 0,  //
+      0, 0, 0, 0, 0   //
   };
   struct gs_image src_erode = {5, 5, data_erode};
   uint8_t eroded_data[5 * 5];
@@ -99,11 +101,11 @@ static void test_morph(void) {
   assert(dst_erode.data[1 * 5 + 1] == 0);    // edge pixel should become black
 
   uint8_t data_dilate[5 * 5] = {
-      0, 0, 0,   0, 0,  //
-      0, 0, 0,   0, 0,  //
-      0, 0, 255, 0, 0,  //
-      0, 0, 0,   0, 0,  //
-      0, 0, 0,   0, 0   //
+      0, 0, 0, 0, 0,  //
+      0, 0, 0, 0, 0,  //
+      0, 0, W, 0, 0,  //
+      0, 0, 0, 0, 0,  //
+      0, 0, 0, 0, 0   //
   };
   struct gs_image src_dilate = {5, 5, data_dilate};
   uint8_t dilated_data[5 * 5];
@@ -118,11 +120,11 @@ static void test_morph(void) {
 
 static void test_sobel(void) {
   uint8_t data[5 * 5] = {
-      0, 0, 255, 255, 255,  // vertical edge
-      0, 0, 255, 255, 255,  //
-      0, 0, 255, 255, 255,  //
-      0, 0, 255, 255, 255,  //
-      0, 0, 255, 255, 255   //
+      0, 0, W, W, W,  // vertical edge
+      0, 0, W, W, W,  //
+      0, 0, W, W, W,  //
+      0, 0, W, W, W,  //
+      0, 0, W, W, W   //
   };
   struct gs_image src = {5, 5, data};
   uint8_t sobel_data[5 * 5] = {0};
@@ -132,11 +134,11 @@ static void test_sobel(void) {
   assert(dst.data[2 * 5 + 0] == 0);                                // away from edge should be 0
 
   uint8_t data_horizontal[5 * 5] = {
-      0,   0,   0,   0,   0,    // horizontal edge
-      0,   0,   0,   0,   0,    //
-      255, 255, 255, 255, 255,  //
-      255, 255, 255, 255, 255,  //
-      255, 255, 255, 255, 255   //
+      0, 0, 0, 0, 0,  // horizontal edge
+      0, 0, 0, 0, 0,  //
+      W, W, W, W, W,  //
+      W, W, W, W, W,  //
+      W, W, W, W, W   //
   };
   struct gs_image src_h = {5, 5, data_horizontal};
   uint8_t sobel_data_h[5 * 5] = {0};
@@ -202,18 +204,18 @@ static void test_adaptive_threshold(void) {
       200, 200, 100, 200, 200   //
   };
   uint8_t threshold[5 * 5] = {
-      0,   0,   255, 0,   0,    //
-      0,   0,   255, 0,   0,    //
-      0,   0,   255, 0,   0,    //
-      255, 255, 0,   255, 255,  //
-      0,   255, 0,   255, 0     //
+      0, 0, W, 0, 0,  //
+      0, 0, W, 0, 0,  //
+      0, 0, W, 0, 0,  //
+      W, W, 0, W, W,  //
+      0, W, 0, W, 0   //
   };
   uint8_t threshold_5[5 * 5] = {
-      255, 0,   255, 0,   255,  //
-      255, 0,   255, 0,   255,  //
-      0,   0,   255, 0,   0,    //
-      255, 255, 0,   255, 255,  //
-      255, 255, 0,   255, 255   //
+      W, 0, W, 0, W,  //
+      W, 0, W, 0, W,  //
+      0, 0, W, 0, 0,  //
+      W, W, 0, W, W,  //
+      W, W, 0, W, W   //
   };
   struct gs_image src = {5, 5, data};
   uint8_t adaptive_data[5 * 5];
@@ -226,59 +228,71 @@ static void test_adaptive_threshold(void) {
   for (unsigned i = 0; i < 25; i++) assert(dst.data[i] == threshold_5[i]);
 }
 
-static void test_connected_components(void) {
-  uint8_t test_data[6 * 5] = {
-      255, 255, 0,   0,   255, 0,    //
-      255, 0,   0,   255, 255, 0,    //
-      0,   0,   255, 255, 0,   0,    //
-      255, 0,   255, 0,   0,   255,  //
-      0,   255, 0,   0,   0,   255   //
+static void test_blobs(void) {
+  uint8_t data[6 * 5] = {
+      W, W, 0, 0, W, 0,  //
+      W, 0, 0, W, W, 0,  //
+      0, 0, W, W, 0, 0,  //
+      W, W, W, 0, 0, W,  //
+      0, W, 0, 0, 0, W   //
   };
-  struct gs_image binary = {6, 5, test_data};
+  struct gs_image img = {6, 5, data};
 
-  // 4-point connectivity
-  gs_label labels_4[6 * 5] = {0};
-  gs_label table_4[256] = {0};
-  struct gs_component components_4[10];
-  unsigned num_components_4 =
-      gs_connected_components(binary, labels_4, components_4, 10, table_4, 256, 0);
-  assert(num_components_4 == 5);
-  struct gs_component expected_components_4[] = {
-      {3, {0, 0, 2, 2}},  //
-      {6, {2, 0, 3, 4}},  //
-      {1, {0, 3, 1, 1}},  //
-      {2, {5, 3, 1, 2}},  //
-      {1, {1, 4, 1, 1}}   //
+  gs_label labels[6 * 5] = {0};
+  struct gs_blob blobs[10] = {0};
+  unsigned n = gs_blobs(img, labels, blobs, 10);
+  assert(n == 3);
+  struct gs_blob expected[] = {
+      {1, 3, {0, 0}, {1, 1}},  //
+      {2, 9, {0, 0}, {4, 4}},  //
+      {3, 2, {5, 3}, {5, 4}}   //
   };
-  for (unsigned i = 0; i < num_components_4; i++) {
-    assert(components_4[i].area == expected_components_4[i].area);
-    assert(components_4[i].box.x == expected_components_4[i].box.x);
-    assert(components_4[i].box.y == expected_components_4[i].box.y);
-    assert(components_4[i].box.w == expected_components_4[i].box.w);
-    assert(components_4[i].box.h == expected_components_4[i].box.h);
+  (void)expected;
+  for (unsigned i = 0; i < n; i++) {
+    assert(blobs[i].label == expected[i].label);
+    assert(blobs[i].area == expected[i].area);
+    assert(blobs[i].tl.x == expected[i].tl.x && blobs[i].tl.y == expected[i].tl.y);
+    assert(blobs[i].rb.x == expected[i].rb.x && blobs[i].rb.y == expected[i].rb.y);
   }
+}
 
-  // 8-point connectivity
-  gs_label labels_8[6 * 5] = {0}, table_8[256] = {0};
-  struct gs_component components_8[10];
-  unsigned num_components_8 =
-      gs_connected_components(binary, labels_8, components_8, 10, table_8, 256, 1);
-  assert(num_components_8 == 3);
-
-  struct gs_component expected_components_8[] = {
-      {3, {0, 0, 2, 2}},  //
-      {8, {0, 0, 5, 5}},  //
-      {2, {5, 3, 1, 2}},  //
+static void test_trace_contour(void) {
+  uint8_t data[5 * 5] = {
+      0, W, W, W, 0,  //
+      0, W, W, W, 0,  //
+      0, W, 0, W, W,  //
+      0, W, W, W, 0,  //
+      0, 0, W, 0, W   //
   };
-
-  for (unsigned i = 0; i < num_components_8; i++) {
-    // Component label is now implicitly i+1 (array index + 1)
-    assert(components_8[i].area == expected_components_8[i].area);
-    assert(components_8[i].box.x == expected_components_8[i].box.x);
-    assert(components_8[i].box.y == expected_components_8[i].box.y);
-    assert(components_8[i].box.w == expected_components_8[i].box.w);
-    assert(components_8[i].box.h == expected_components_8[i].box.h);
+  uint8_t visited_data[5 * 5] = {0};
+  uint8_t expected_visisted_data[5 * 5] = {
+      0, W, W, W, 0,  //
+      0, W, 0, W, 0,  //
+      0, W, 0, 0, W,  //
+      0, W, 0, W, 0,  //
+      0, 0, W, 0, 0   //
+  };
+  struct gs_image img = {5, 5, data};
+  struct gs_image visited = {5, 5, visited_data};
+  struct gs_contour contour;
+  contour.start = (struct gs_point){1, 0};
+  gs_trace_contour(img, visited, &contour);
+  assert(contour.length == 10);
+  assert(contour.box.x == 1 && contour.box.y == 0 && contour.box.w == 4 && contour.box.h == 5);
+  gs_for(visited, x, y) {
+    assert(visited.data[y * visited.w + x] == expected_visisted_data[y * visited.w + x]);
   }
+}
+
+static void test_find_contours(void) {
+  uint8_t data[7 * 7] = {0, W, W, 0, 0, W, 0, 0, W, 0, 0, W, W, W, 0, 0, 0, 0, W, W, 0, 0, W, W, 0,
+                         W, W, W, 0, W, W, 0, W, W, W, 0, 0, 0, 0, W, W, 0, 0, 0, W, 0, 0, W, 0};
+  uint8_t visdata[7 * 7] = {0};
+  struct gs_image img = {7, 7, data};
+  struct gs_image visited = {7, 7, visdata};
+  struct gs_contour contours[10] = {0};
+  unsigned n = gs_find_contours(img, visited, contours, 10);
+  printf("n = %u\n", n);
 }
 
 int main(void) {
@@ -291,6 +305,7 @@ int main(void) {
   test_otsu();
   test_morph();
   test_sobel();
-  test_connected_components();
+  test_blobs();
+  test_trace_contour();
   return 0;
 }
