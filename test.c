@@ -243,9 +243,9 @@ static void test_blobs(void) {
   unsigned n = gs_blobs(img, labels, blobs, 10);
   assert(n == 3);
   struct gs_blob expected[] = {
-      {1, 3, {0, 0, 2, 2}, {1, 1}},  //
-      {2, 9, {0, 0, 5, 5}, {4, 4}},  //
-      {3, 2, {5, 3, 1, 2}, {5, 4}}   //
+      {1, 3, {0, 0, 2, 2}, {0, 0}},  //
+      {2, 9, {0, 0, 5, 5}, {2, 2}},  //
+      {3, 2, {5, 3, 1, 2}, {5, 3}}   //
   };
   (void)expected;
   for (unsigned i = 0; i < n; i++) {
@@ -253,6 +253,8 @@ static void test_blobs(void) {
     assert(blobs[i].area == expected[i].area);
     assert(blobs[i].box.x == expected[i].box.x && blobs[i].box.y == expected[i].box.y);
     assert(blobs[i].box.w == expected[i].box.w && blobs[i].box.h == expected[i].box.h);
+    assert(blobs[i].centroid.x == expected[i].centroid.x &&
+           blobs[i].centroid.y == expected[i].centroid.y);
   }
 }
 

@@ -241,6 +241,7 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
   gs_assert(gs_valid(img) && labels != NULL && blobs != NULL && nblobs > 0);
   unsigned w = img.w;
   gs_label next = 1, parents[nblobs + 1];
+  unsigned cx[nblobs], cy[nblobs];
   for (unsigned i = 0; i < img.w * img.h; i++) labels[i] = 0;
   for (unsigned i = 0; i < nblobs; i++)
     blobs[i] = (struct gs_blob){0, 0, {UINT_MAX, UINT_MAX, 0, 0}, {0, 0}};
@@ -255,10 +256,12 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
     if (!n) {                       // new component
       if (next > nblobs) continue;  // out of labels
       blobs[next - 1] = (struct gs_blob){next, 1, {x, y, 1, 1}, {x, y}};
+      cx[next - 1] = x, cy[next - 1] = y;
       labels[y * w + x] = next++;
     } else {  // existing component
       labels[y * w + x] = n;
       struct gs_blob *b = &blobs[n - 1];
+      cx[n - 1] += x, cy[n - 1] += y;
       b->area++;
       b->box.x = GS_MIN(x, b->box.x), b->box.y = GS_MIN(y, b->box.y);
       // keep bottom-right point coordinates in w/h of the rect, adjust later
@@ -280,6 +283,7 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
       broot->box.y = GS_MIN(broot->box.y, blobs[i].box.y);
       broot->box.w = GS_MAX(broot->box.w, blobs[i].box.w);
       broot->box.h = GS_MAX(broot->box.h, blobs[i].box.h);
+      cx[root - 1] += cx[i], cy[root - 1] += cy[i];
       blobs[i].area = 0;
     }
   }
@@ -296,6 +300,10 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
     // fix rect width/height from bottom-right point to actual width/height
     blobs[i].box.w = blobs[i].box.w - blobs[i].box.x + 1;
     blobs[i].box.h = blobs[i].box.h - blobs[i].box.y + 1;
+    // calculate centroids
+    blobs[i].centroid.x = cx[i] / blobs[i].area;
+    blobs[i].centroid.y = cy[i] / blobs[i].area;
+    // move to compacted position
     blobs[m] = blobs[i], blobs[m].label = m + 1, m++;
   }
 
