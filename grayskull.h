@@ -19,7 +19,7 @@ struct gs_rect {
   unsigned x, y, w, h;
 };
 
-typedef uint8_t gs_label;
+typedef uint16_t gs_label;
 
 struct gs_blob {
   gs_label label;
@@ -132,22 +132,24 @@ GS_API void gs_histogram(struct gs_image img, unsigned hist[256]) {
   for (unsigned i = 0; i < img.w * img.h; i++) hist[img.data[i]]++;
 }
 
-GS_API uint8_t gs_otsu_theshold(struct gs_image img) {
+GS_API uint8_t gs_otsu_threshold(struct gs_image img) {
   gs_assert(gs_valid(img));
-  unsigned hist[256] = {0};
+  unsigned hist[256] = {0}, wb = 0, wf = 0, threshold = 0;
   gs_histogram(img, hist);
-  unsigned sum = 0, wb = 0, wf = 0, threshold = 0;
-  for (unsigned i = 0; i < 256; i++) sum += i * hist[i];
-  float sumB = 0, varMax = 0;
-  for (unsigned t = 0; t < 256 && wb < img.w * img.h; t++) {
+  float sum = 0, sumB = 0, varMax = -1.0;
+  for (unsigned i = 0; i < 256; i++) sum += (float)i * hist[i];
+  for (unsigned t = 0; t < 256; t++) {
     wb += hist[t];
+    if (wb == 0) continue;
     wf = img.w * img.h - wb;
-    sumB += (float)(t * hist[t]);
-    float mB = sumB / wb, mF = (sum - sumB) / wf;
-    float varBetween = (float)(wb * wf) * (mB - mF) * (mB - mF);
+    if (wf == 0) break;
+    sumB += (float)t * hist[t];
+    float mB = (float)sumB / wb;
+    float mF = (float)(sum - sumB) / wf;
+    float varBetween = (float)wb * (float)wf * (mB - mF) * (mB - mF);
     if (varBetween > varMax) varMax = varBetween, threshold = t;
   }
-  return threshold;
+  return (uint8_t)threshold;
 }
 
 GS_API void gs_threshold(struct gs_image img, uint8_t thresh) {
@@ -255,7 +257,7 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
     gs_label n = (left && top ? GS_MIN(left, top) : (left ? left : (top ? top : 0)));
     if (!n) {                       // new component
       if (next > nblobs) continue;  // out of labels
-      blobs[next - 1] = (struct gs_blob){next, 1, {x, y, 1, 1}, {x, y}};
+      blobs[next - 1] = (struct gs_blob){next, 1, {x, y, x, y}, {x, y}};
       cx[next - 1] = x, cy[next - 1] = y;
       labels[y * w + x] = next++;
     } else {  // existing component
@@ -304,10 +306,29 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
     blobs[i].centroid.x = cx[i] / blobs[i].area;
     blobs[i].centroid.y = cy[i] / blobs[i].area;
     // move to compacted position
-    blobs[m] = blobs[i], blobs[m].label = m + 1, m++;
+    blobs[m++] = blobs[i];
   }
 
   return m;  // number of non-empty blobs
+}
+
+GS_API void gs_blob_corners(struct gs_image img, gs_label *labels, struct gs_blob *b,
+                            struct gs_point c[4]) {
+  gs_assert(gs_valid(img) && b && labels);
+  struct gs_point tl = b->centroid, tr = b->centroid, br = b->centroid, bl = b->centroid;
+  int min_sum = INT_MAX, max_sum = INT_MIN, min_diff = INT_MAX, max_diff = INT_MIN;
+  for (unsigned y = b->box.y; y < b->box.y + b->box.h; y++) {
+    for (unsigned x = b->box.x; x < b->box.x + b->box.w; x++) {
+			if (img.data[y * img.w + x] < 128) continue; // skip background pixels
+      if (labels[y * img.w + x] != b->label) continue;
+      int sum = (int)x + (int)y, diff = (int)x - (int)y;
+      if (sum < min_sum) min_sum = sum, tl = (struct gs_point){x, y};
+      if (sum > max_sum) max_sum = sum, br = (struct gs_point){x, y};
+      if (diff < min_diff) min_diff = diff, bl = (struct gs_point){x, y};
+      if (diff > max_diff) max_diff = diff, tr = (struct gs_point){x, y};
+    }
+  }
+  c[0] = tl, c[1] = tr, c[2] = br, c[3] = bl;
 }
 
 GS_API void gs_perspective_correct(struct gs_image dst, struct gs_image src, struct gs_point c[4]) {

@@ -84,7 +84,7 @@ static void blur(struct gs_image img, struct gs_image *out, char *argv[]) {
 }
 
 static void threshold(struct gs_image img, struct gs_image *out, char *argv[]) {
-  int t = strcmp(argv[0], "otsu") == 0 ? gs_otsu_theshold(img) : atoi(argv[0]);
+  int t = strcmp(argv[0], "otsu") == 0 ? gs_otsu_threshold(img) : atoi(argv[0]);
   if (t <= 0) {
     fprintf(stderr, "Error: Invalid threshold: %s\n", argv[0]);
     return;
@@ -166,6 +166,32 @@ static void blobs(struct gs_image img, struct gs_image *out, char *argv[]) {
   gs_for(img, x, y) if (img.data[y * out->w + x] > 128) out->data[y * img.w + x] = 255;
 }
 
+static void scan(struct gs_image img, struct gs_image *out, char *argv[]) {
+  (void)argv;
+  struct gs_image tmp = gs_alloc(img.w, img.h);
+  // preprocess, remove noise, binarise
+  gs_blur(tmp, img, 1);
+  gs_threshold(tmp, gs_otsu_threshold(tmp) + 10);
+  // find blobs
+  gs_label *labels = calloc(img.w * img.h, sizeof(gs_label));
+  struct gs_blob blobs[1000];
+  unsigned n = gs_blobs(tmp, labels, blobs, sizeof(blobs) / sizeof(blobs[0]));
+  // find largest blob
+  unsigned largest = 0;
+  for (unsigned i = 1; i < n; i++)
+    if (blobs[i].area > blobs[largest].area) largest = i;
+  // find corners
+  struct gs_point corners[4];
+  gs_blob_corners(tmp, labels, &blobs[largest], corners);
+	// perspective correct
+	const unsigned OUTPUT_WIDTH = 800, OUTPUT_HEIGHT = 1000;
+	*out = gs_alloc(OUTPUT_WIDTH, OUTPUT_HEIGHT);
+	gs_perspective_correct(*out, img, corners);
+
+	gs_free(tmp);
+	free(labels);
+}
+
 struct cmd {
   const char *name;
   const char *help;
@@ -183,6 +209,7 @@ struct cmd {
     {"sobel", "                Edge detection (Sobel)", 0, 1, sobel},
     {"morph", "<op> <n>        Morphological operation (erode/dilate) N times", 2, 1, morph},
     {"blobs", "<n>             Find up to N blobs", 1, 1, blobs},
+    {"scan", "                 Simple document scanner", 0, 1, scan},
     {NULL, NULL, 0, 0, NULL},
 };
 

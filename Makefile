@@ -28,6 +28,8 @@ testdata: nanomagick
 		./nanomagick morph erode 10 - - | \
 		./nanomagick blobs 150 - out/aruco.pgm
 		./nanomagick view out/aruco.pgm
+	./nanomagick scan testdata/document.pgm out/document.pgm
+	./nanomagick scan testdata/receipt.pgm out/receipt.pgm
 
 nanomagick: examples/nanomagick/nanomagick.c grayskull.h
 	$(CC) $(CFLAGS) -I. -o nanomagick examples/nanomagick/nanomagick.c $(LDFLAGS)

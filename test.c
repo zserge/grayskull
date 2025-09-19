@@ -181,17 +181,17 @@ static void test_otsu(void) {
       190, 200, 210  // bright cluster
   };
   struct gs_image img = {3, 3, data};
-  uint8_t otsu_thresh = gs_otsu_theshold(img);
+  uint8_t otsu_thresh = gs_otsu_threshold(img);
   assert(otsu_thresh == 60);  // anything above 60 = white, below = black
 
   uint8_t uniform_data[4] = {0, 85, 170, 255};
   struct gs_image uniform_img = {2, 2, uniform_data};
-  uint8_t uniform_thresh = gs_otsu_theshold(uniform_img);
+  uint8_t uniform_thresh = gs_otsu_threshold(uniform_img);
   assert(uniform_thresh == 85);  // above 85 = white, below = black
 
   uint8_t same_data[4] = {128, 128, 128, 128};
   struct gs_image same_img = {2, 2, same_data};
-  uint8_t same_thresh = gs_otsu_theshold(same_img);
+  uint8_t same_thresh = gs_otsu_threshold(same_img);
   assert(same_thresh == 0);  // no variation, should return 0
 }
 
@@ -245,7 +245,7 @@ static void test_blobs(void) {
   struct gs_blob expected[] = {
       {1, 3, {0, 0, 2, 2}, {0, 0}},  //
       {2, 9, {0, 0, 5, 5}, {2, 2}},  //
-      {3, 2, {5, 3, 1, 2}, {5, 3}}   //
+      {6, 2, {5, 3, 1, 2}, {5, 3}}   //
   };
   (void)expected;
   for (unsigned i = 0; i < n; i++) {
