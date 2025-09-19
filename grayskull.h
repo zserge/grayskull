@@ -291,7 +291,7 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
 
   // compact blobs
   unsigned m = 0;
-  for (unsigned i = 0; i < next - 1; i++) {
+  for (int i = 0; i < next - 1; i++) {
     if (blobs[i].area == 0) continue;
     // fix rect width/height from bottom-right point to actual width/height
     blobs[i].box.w = blobs[i].box.w - blobs[i].box.x + 1;
