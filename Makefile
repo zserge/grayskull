@@ -21,6 +21,13 @@ testdata: nanomagick
 	./nanomagick morph erode 2 out/lena_otsu.pgm out/lena_erode.pgm
 	./nanomagick morph dilate 2 out/lena_erode.pgm out/lena_dilate.pgm
 	./nanomagick sobel testdata/lena.pgm - | ./nanomagick view -
+	./nanomagick blur 3 testdata/aruco.pgm - | \
+		./nanomagick sobel - - | \
+		./nanomagick threshold otsu - - | \
+		./nanomagick morph dilate 9 - - | \
+		./nanomagick morph erode 10 - - | \
+		./nanomagick blobs 150 - out/aruco.pgm
+		./nanomagick view out/aruco.pgm
 
 nanomagick: examples/nanomagick/nanomagick.c grayskull.h
 	$(CC) $(CFLAGS) -I. -o nanomagick examples/nanomagick/nanomagick.c $(LDFLAGS)
