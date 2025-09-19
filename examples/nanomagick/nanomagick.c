@@ -64,13 +64,13 @@ static void resize(struct gs_image img, struct gs_image *out, char *argv[]) {
 }
 
 static void crop(struct gs_image img, struct gs_image *out, char *argv[]) {
-	int x = atoi(argv[0]), y = atoi(argv[1]), w = atoi(argv[2]), h = atoi(argv[3]);
-	if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > (int)img.w || y + h > (int)img.h) {
-		fprintf(stderr, "Error: Invalid crop rectangle\n");
-		return;
-	}
-	*out = gs_alloc(w, h);
-	gs_crop(*out, img, (struct gs_rect){x, y, w, h});
+  int x = atoi(argv[0]), y = atoi(argv[1]), w = atoi(argv[2]), h = atoi(argv[3]);
+  if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > (int)img.w || y + h > (int)img.h) {
+    fprintf(stderr, "Error: Invalid crop rectangle\n");
+    return;
+  }
+  *out = gs_alloc(w, h);
+  gs_crop(*out, img, (struct gs_rect){x, y, w, h});
 }
 
 static void blur(struct gs_image img, struct gs_image *out, char *argv[]) {
@@ -90,51 +90,79 @@ static void threshold(struct gs_image img, struct gs_image *out, char *argv[]) {
     return;
   }
   *out = gs_alloc(img.w, img.h);
-	gs_copy(*out, img);
+  gs_copy(*out, img);
   gs_threshold(*out, t);
 }
 
 static void adaptive(struct gs_image img, struct gs_image *out, char *argv[]) {
-	int r = atoi(argv[0]), c = atoi(argv[1]);
-	if (r <= 0 || c < 0) {
-		fprintf(stderr, "Error: Invalid radius or constant\n");
-		return;
-	}
-	*out = gs_alloc(img.w, img.h);
-	gs_adaptive_threshold(*out, img, r, c);
+  int r = atoi(argv[0]), c = atoi(argv[1]);
+  if (r <= 0 || c < 0) {
+    fprintf(stderr, "Error: Invalid radius or constant\n");
+    return;
+  }
+  *out = gs_alloc(img.w, img.h);
+  gs_adaptive_threshold(*out, img, r, c);
 }
 
 static void morph(struct gs_image img, struct gs_image *out, char *argv[]) {
-	const char *op = argv[0];
-	int n = atoi(argv[1]);
-	if ((strcmp(op, "erode") != 0 && strcmp(op, "dilate") != 0) || n <= 0) {
-		fprintf(stderr, "Error: Invalid morphological operation or iterations\n");
-		return;
-	}
-	*out = gs_alloc(img.w, img.h);
-	struct gs_image temp = gs_alloc(img.w, img.h);
-	gs_copy(*out, img);
-	for (int i = 0; i < n; i++) {
-		if (strcmp(op, "erode") == 0) {
-			gs_erode(temp, *out);
-		} else if (strcmp(op, "dilate") == 0) {
-			gs_dilate(temp, *out);
-		} else {
-			fprintf(stderr, "Error: Unknown morphological operation: %s\n", op);
-			gs_free(temp);
-			gs_free(*out);
-			*out = (struct gs_image){0, 0, NULL};
-			return;
-		}
-		gs_copy(*out, temp);
-	}
-	gs_free(temp);
+  const char *op = argv[0];
+  int n = atoi(argv[1]);
+  if ((strcmp(op, "erode") != 0 && strcmp(op, "dilate") != 0) || n <= 0) {
+    fprintf(stderr, "Error: Invalid morphological operation or iterations\n");
+    return;
+  }
+  *out = gs_alloc(img.w, img.h);
+  struct gs_image temp = gs_alloc(img.w, img.h);
+  gs_copy(*out, img);
+  for (int i = 0; i < n; i++) {
+    if (strcmp(op, "erode") == 0) {
+      gs_erode(temp, *out);
+    } else if (strcmp(op, "dilate") == 0) {
+      gs_dilate(temp, *out);
+    } else {
+      fprintf(stderr, "Error: Unknown morphological operation: %s\n", op);
+      gs_free(temp);
+      gs_free(*out);
+      *out = (struct gs_image){0, 0, NULL};
+      return;
+    }
+    gs_copy(*out, temp);
+  }
+  gs_free(temp);
 }
 
 static void sobel(struct gs_image img, struct gs_image *out, char *argv[]) {
-	(void)argv;
-	*out = gs_alloc(img.w, img.h);
-	gs_sobel(*out, img);
+  (void)argv;
+  *out = gs_alloc(img.w, img.h);
+  gs_sobel(*out, img);
+}
+
+static void blobs(struct gs_image img, struct gs_image *out, char *argv[]) {
+  int n = atoi(argv[0]);
+  if (n <= 0) {
+    fprintf(stderr, "Error: Invalid number of blobs\n");
+    return;
+  }
+  *out = gs_alloc(img.w, img.h);
+  gs_label *labels = (gs_label *)calloc(img.w * img.h, sizeof(gs_label));
+  struct gs_blob *blobs = (struct gs_blob *)calloc(n, sizeof(struct gs_blob));
+  if (!labels || !blobs) {
+    fprintf(stderr, "Error: Memory allocation failed\n");
+    free(labels);
+    free(blobs);
+    gs_free(*out);
+    *out = (struct gs_image){0, 0, NULL};
+    return;
+  }
+  unsigned nblobs = gs_blobs(img, labels, blobs, n);
+  for (unsigned i = 0; i < nblobs; i++) {
+    unsigned x1 = GS_MAX(0, (int)blobs[i].tl.x - 2), y1 = GS_MAX(0, (int)blobs[i].tl.y - 2);
+    unsigned x2 = GS_MIN(img.w, blobs[i].rb.x + 2), y2 = GS_MIN(img.h, blobs[i].rb.y + 2);
+    for (unsigned y = y1; y <= y2; y++) {
+      for (unsigned x = x1; x <= x2; x++) { out->data[y * out->w + x] = 128; }
+    }
+  }
+  gs_for(img, x, y) if (img.data[y * out->w + x] > 128) out->data[y * img.w + x] = 255;
 }
 
 struct cmd {
@@ -144,22 +172,24 @@ struct cmd {
   int hasout;
   void (*func)(struct gs_image img, struct gs_image *out, char *argv[]);
 } commands[] = {
-    {"identify", "          Show image information", 0, 0, identify},
-    {"view",     "              Display image in terminal", 0, 0, view},
-    {"resize",   "<w> <h>     Resize image to WxH", 2, 1, resize},
-		{"crop", "<x> <y> <w> <h>  Crop image to rectangle (x,y,w,h)", 4, 1, crop},
-    {"blur",     "<r>           Blur image with radius R", 1, 1, blur},
-    {"threshold", "<t>      Apply threshold (0-255 or otsu)", 1, 1, threshold},
-    {"adaptive",  "<r> <c>   Apply adaptive threshold with radius R and constant C", 2, 1, adaptive},
-		{"sobel",    "          Edge detection (Sobel)", 0, 1, sobel},
-		{"morph", "<op> <n>	 Morphological operation (erode/dilate) N times", 2, 1, morph},
+    {"identify", "             Show image information", 0, 0, identify},
+    {"view", "                 Display image in terminal", 0, 0, view},
+    {"resize", "<w> <h>        Resize image to WxH", 2, 1, resize},
+    {"crop", "<x> <y> <w> <h>  Crop image to rectangle (x,y,w,h)", 4, 1, crop},
+    {"blur", "<r>              Blur image with radius R", 1, 1, blur},
+    {"threshold", "<t>         Apply threshold (0-255 or otsu)", 1, 1, threshold},
+    {"adaptive", "<r> <c>      Apply adaptive threshold, radius R and constant C", 2, 1, adaptive},
+    {"sobel", "                Edge detection (Sobel)", 0, 1, sobel},
+    {"morph", "<op> <n>        Morphological operation (erode/dilate) N times", 2, 1, morph},
+    {"blobs", "<n>             Find up to N blobs", 1, 1, blobs},
     {NULL, NULL, 0, 0, NULL},
 };
 
 static void usage(const char *app) {
   printf("Usage: %s <command> [params] [input.pgm] [output.pgm]\n\n", app);
   printf("Commands:\n");
-  for (struct cmd *cmd = commands; cmd->name != NULL; cmd++) printf("  %s %s\n", cmd->name, cmd->help);
+  for (struct cmd *cmd = commands; cmd->name != NULL; cmd++)
+    printf("  %s %s\n", cmd->name, cmd->help);
 }
 
 int main(int argc, char *argv[]) {
