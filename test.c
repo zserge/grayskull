@@ -249,9 +249,6 @@ static void test_blobs(void) {
   };
   (void)expected;
   for (unsigned i = 0; i < n; i++) {
-    printf("Blob %d: label=%d, area=%d, box=(%d,%d,%d,%d), centroid=(%u,%u)\n", i, blobs[i].label,
-           blobs[i].area, blobs[i].box.x, blobs[i].box.y, blobs[i].box.w, blobs[i].box.h,
-           blobs[i].centroid.x, blobs[i].centroid.y);
     assert(blobs[i].label == expected[i].label);
     assert(blobs[i].area == expected[i].area);
     assert(blobs[i].box.x == expected[i].box.x && blobs[i].box.y == expected[i].box.y);

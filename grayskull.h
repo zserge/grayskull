@@ -271,7 +271,7 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
     }
   }
   // merge blobs
-  for (unsigned i = 0; i < next - 1; i++) {
+  for (int i = 0; i < next - 1; i++) {
     gs_label root = gs_root(blobs[i].label, parents);
     if (root != blobs[i].label) {
       struct gs_blob *broot = &blobs[root - 1];
