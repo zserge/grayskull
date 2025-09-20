@@ -319,7 +319,7 @@ GS_API void gs_blob_corners(struct gs_image img, gs_label *labels, struct gs_blo
   int min_sum = INT_MAX, max_sum = INT_MIN, min_diff = INT_MAX, max_diff = INT_MIN;
   for (unsigned y = b->box.y; y < b->box.y + b->box.h; y++) {
     for (unsigned x = b->box.x; x < b->box.x + b->box.w; x++) {
-			if (img.data[y * img.w + x] < 128) continue; // skip background pixels
+      if (img.data[y * img.w + x] < 128) continue;  // skip background pixels
       if (labels[y * img.w + x] != b->label) continue;
       int sum = (int)x + (int)y, diff = (int)x - (int)y;
       if (sum < min_sum) min_sum = sum, tl = (struct gs_point){x, y};
