@@ -34,6 +34,10 @@ struct gs_contour {
   unsigned length;
 };
 
+struct gs_keypoint {
+  unsigned x, y, score;
+};
+
 struct gs_image {
   unsigned w, h;
   uint8_t *data;
@@ -389,5 +393,58 @@ GS_API void gs_trace_contour(struct gs_image img, struct gs_image visited, struc
       seenstart = 1;
     }
   }
+}
+
+GS_API unsigned gs_fast(struct gs_image img, struct gs_image scoremap, struct gs_keypoint *kps,
+                        unsigned nkps, unsigned threshold) {
+  gs_assert(gs_valid(img) && kps && nkps > 0);
+  static const int dx[16] = {0, 1, 2, 3, 3, 3, 2, 1, 0, -1, -2, -3, -3, -3, -2, -1};
+  static const int dy[16] = {-3, -3, -2, -1, 0, 1, 2, 3, 3, 3, 2, 1, 0, -1, -2, -3};
+  unsigned n = 0;
+  // first pass: compute score map
+  for (unsigned y = 3; y < img.h - 3; y++) {
+    for (unsigned x = 3; x < img.w - 3; x++) {
+      uint8_t p = img.data[y * img.w + x];
+      int run = 0, score = 0;
+      for (int i = 0; i < 16 + 9; i++) {
+        int idx = (i % 16);
+        uint8_t v = img.data[(y + dy[idx]) * img.w + (x + dx[idx])];
+        if (v > p + threshold) {
+          run = (run > 0) ? run + 1 : 1;
+        } else if (v < p - threshold) {
+          run = (run < 0) ? run - 1 : -1;
+        } else {
+          run = 0;
+        }
+        if (run >= 9 || run <= -9) {
+          score = 255;
+          for (int j = 0; j < 16; j++) {
+            int d = abs(img.data[(y + dy[j]) * img.w + (x + dx[j])] - p);
+            if (d < score) score = d;
+          }
+          break;
+        }
+      }
+      scoremap.data[y * img.w + x] = score;
+    }
+  }
+  // second pass: non-maximum suppression
+  for (unsigned y = 3; y < img.h - 3; y++) {
+    for (unsigned x = 3; x < img.w - 3; x++) {
+      int s = scoremap.data[y * img.w + x], is_max = 1;
+      if (s == 0) continue;
+      for (int yy = -1; yy <= 1 && is_max; yy++) {
+        for (int xx = -1; xx <= 1; xx++) {
+          if (xx == 0 && yy == 0) continue;
+          if (scoremap.data[(y + yy) * img.w + (x + xx)] > s) {
+            is_max = 0;
+            break;
+          }
+        }
+      }
+      if (is_max && n < nkps) kps[n++] = (struct gs_keypoint){x, y, (unsigned)s};
+    }
+  }
+  return n;
 }
 #endif  // GRAYSKULL_H
