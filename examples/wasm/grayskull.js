@@ -11,15 +11,20 @@ let wasm, memory;
 let videoStream;
 let animationFrameId;
 let imageBuffers = [null, null, null]; // To hold pointers to WASM memory
+let overlayCtx;  // For drawing overlays
+let templateKeypoints = null;  // For ORB template matching
 
 const operations = {
     "blur": { params: [{ name: "radius", type: "range", default: 3, min: 1, max: 20 }] },
-    "thresh": { params: [{ name: "threshold", type: "range", default: 128, min: 0, max: 255 }] },
-    "adaptive": { params: [{ name: "block_size", type: "range", default: 15, min: 3, max: 51, step: 2 }] },
-    "erode": { params: [] },
-    "dilate": { params: [] },
     "sobel": { params: [] },
     "otsu": { params: [] },
+    "thresh": { params: [{ name: "threshold", type: "range", default: 128, min: 0, max: 255 }] },
+    "adaptive": { params: [{ name: "block_size", type: "range", default: 15, min: 3, max: 51, step: 2 }] },
+    "erode": { params: [{ name: "iterations", type: "range", default: 1, min: 1, max: 10 }] },
+    "dilate": { params: [{ name: "iterations", type: "range", default: 1, min: 1, max: 10 }] },
+    "blobs": { params: [{ name: "max_blobs", type: "range", default: 10, min: 1, max: 100 }] },
+    "keypoints": { params: [{ name: "threshold", type: "range", default: 100, min: 5, max: 500 }, { name: "max_points", type: "range", default: 100, min: 10, max: 500 }] },
+    "orb": { params: [{ name: "threshold", type: "range", default: 30, min: 5, max: 500 }, { name: "max_features", type: "range", default: 100, min: 10, max: 300 }] },
 };
 
 // --- Grayscale Conversion in JavaScript ---
@@ -34,6 +39,36 @@ function grayToRgba(gray, rgba) {
     for (let i = 0; i < gray.length; i++) {
         rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = gray[i];
         rgba[i * 4 + 3] = 255; // Alpha
+    }
+}
+
+// Template capture functionality
+function captureTemplate() {
+    if (!wasm || !imageBuffers[0]) {
+        alert('Camera not running');
+        return;
+    }
+
+    const width = canvas.width;
+    const height = canvas.height;
+    const imageSize = width * height;
+
+    // Capture current frame as template
+    ctx.drawImage(video, 0, 0, width, height);
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const gray = new Uint8Array(imageSize);
+    rgbaToGray(imageData.data, gray);
+    new Uint8Array(memory.buffer, imageBuffers[0], imageSize).set(gray);
+
+    // Extract ORB features from template
+    const templateFeatures = wasm.gs_extract_orb_features(0, 20, 200);
+    if (templateFeatures > 0) {
+        wasm.gs_store_template_keypoints(templateFeatures);
+        templateKeypoints = { count: templateFeatures };
+        document.getElementById('template-status').textContent = `Template captured: ${templateFeatures} features`;
+        console.log(`Template captured with ${templateFeatures} ORB features`);
+    } else {
+        alert('No features detected in template. Try capturing a more textured area.');
     }
 }
 
@@ -62,6 +97,7 @@ async function init() {
     }
     await populateCameraList();
     addStepButton.onclick = () => addPipelineStep();
+    document.getElementById('capture-template').onclick = captureTemplate;
     addPipelineStep('blur'); // Add a default first step
     startButton.disabled = false;
 }
@@ -236,6 +272,7 @@ function processFrame() {
     // 2. Execute pipeline
     let readIdx = 0;
     let writeIdx = 1;
+    let overlayData = [];  // Store data for overlays
 
     pipelineStepsContainer.querySelectorAll('.pipeline-step').forEach(stepDiv => {
         const op = stepDiv.querySelector('select').value;
@@ -257,6 +294,27 @@ function processFrame() {
                 wasm.gs_copy_image(writeIdx, readIdx);
                 wasm.gs_threshold_image(writeIdx, threshold);
                 break;
+            case 'blobs':
+                wasm.gs_copy_image(writeIdx, readIdx);
+                const numBlobs = wasm.gs_detect_blobs(readIdx, params[0] || 10);
+                overlayData.push({ type: 'blobs', count: numBlobs });
+                break;
+            case 'keypoints':
+                wasm.gs_copy_image(writeIdx, readIdx);
+                const numKeypoints = wasm.gs_detect_fast_keypoints(readIdx, params[0] || 20, params[1] || 100);
+                overlayData.push({ type: 'keypoints', count: numKeypoints });
+                break;
+            case 'orb':
+                wasm.gs_copy_image(writeIdx, readIdx);
+                const numOrbFeatures = wasm.gs_extract_orb_features(readIdx, params[0] || 20, params[1] || 100);
+                overlayData.push({ type: 'orb', count: numOrbFeatures });
+
+                // If we have template keypoints, try to match
+                if (templateKeypoints && templateKeypoints.count > 0) {
+                    const numMatches = wasm.gs_match_orb_features(templateKeypoints.count, numOrbFeatures, 60.0);
+                    overlayData.push({ type: 'matches', count: numMatches });
+                }
+                break;
         }
         // Swap buffers
         [readIdx, writeIdx] = [writeIdx, (writeIdx + 1) % 3 === readIdx ? (writeIdx + 2) % 3 : (writeIdx + 1) % 3];
@@ -268,7 +326,147 @@ function processFrame() {
     grayToRgba(resultGray, imageDataOut.data);
     ctx.putImageData(imageDataOut, 0, 0);
 
+    // 4. Draw overlays
+    drawOverlays(overlayData, width, height);
+
     animationFrameId = requestAnimationFrame(processFrame);
+}
+
+function drawOverlays(overlayData, width, height) {
+    if (!overlayData.length) return;
+
+    // Create overlay canvas for drawing annotations
+    ctx.strokeStyle = '#ff0000';
+    ctx.fillStyle = '#ff0000';
+    ctx.lineWidth = 2;
+
+    overlayData.forEach(overlay => {
+        switch (overlay.type) {
+            case 'blobs':
+                drawBlobs(overlay.count);
+                break;
+            case 'keypoints':
+                drawKeypoints(overlay.count, '#00ff00');
+                break;
+            case 'orb':
+                drawKeypoints(overlay.count, '#0080ff', true);
+                break;
+            case 'matches':
+                drawMatches(overlay.count);
+                break;
+        }
+    });
+}
+
+function drawBlobs(count) {
+    ctx.strokeStyle = '#ff0000';
+    ctx.lineWidth = 2;
+
+    for (let i = 0; i < count; i++) {
+        const blobPtr = wasm.gs_get_blob(i);
+        if (!blobPtr) continue;
+
+        // Read blob data from WASM memory
+        const blobData = new Uint32Array(memory.buffer, blobPtr, 8); // gs_blob struct
+        const area = blobData[1];
+        if (area < 50) continue; // Skip very small blobs
+
+        const x = blobData[2];
+        const y = blobData[3];
+        const w = blobData[4];
+        const h = blobData[5];
+        const centroidX = blobData[6];
+        const centroidY = blobData[7];
+
+        // Draw bounding box
+        ctx.strokeRect(x, y, w, h);
+
+        // Draw centroid
+        ctx.fillStyle = '#ff0000';
+        ctx.beginPath();
+        ctx.arc(centroidX, centroidY, 3, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Draw area text
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`${area}`, x, y - 5);
+    }
+}
+
+function drawKeypoints(count, color, withOrientation = false) {
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1;
+
+    for (let i = 0; i < count; i++) {
+        const kpPtr = withOrientation ? wasm.gs_get_orb_keypoint(i) : wasm.gs_get_keypoint(i);
+        if (!kpPtr) continue;
+
+        // Read keypoint data (x, y, response, angle)
+        const kpData = new Uint32Array(memory.buffer, kpPtr, 3);
+        const x = kpData[0];
+        const y = kpData[1];
+        const response = kpData[2];
+
+        if (response < 10) continue; // Skip weak keypoints
+
+        // Draw circle
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, 2 * Math.PI);
+        ctx.stroke();
+
+        // Draw orientation line for ORB features
+        if (withOrientation) {
+            const angleData = new Float32Array(memory.buffer, kpPtr + 12, 1);
+            const angle = angleData[0];
+            const length = 8;
+            const endX = x + Math.cos(angle) * length;
+            const endY = y + Math.sin(angle) * length;
+
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+        }
+    }
+}
+
+function drawMatches(count) {
+    if (!templateKeypoints || count === 0) return;
+
+    ctx.strokeStyle = '#ffff00';
+    ctx.lineWidth = 1;
+
+    for (let i = 0; i < count; i++) {
+        const matchPtr = wasm.gs_get_match(i);
+        if (!matchPtr) continue;
+
+        // Read match data (idx1, idx2, distance)
+        const matchData = new Uint32Array(memory.buffer, matchPtr, 3);
+        const templateIdx = matchData[0];
+        const sceneIdx = matchData[1];
+        const distance = matchData[2];
+
+        if (distance > 40) continue; // Skip poor matches
+
+        // Get scene keypoint
+        const sceneKpPtr = wasm.gs_get_orb_keypoint(sceneIdx);
+        if (!sceneKpPtr) continue;
+
+        const sceneKpData = new Uint32Array(memory.buffer, sceneKpPtr, 2);
+        const sceneX = sceneKpData[0];
+        const sceneY = sceneKpData[1];
+
+        // Draw match indicator
+        ctx.fillStyle = '#ffff00';
+        ctx.beginPath();
+        ctx.arc(sceneX, sceneY, 5, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Draw match distance
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`${distance}`, sceneX + 6, sceneY - 6);
+    }
 }
 
 init();

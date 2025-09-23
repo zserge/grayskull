@@ -90,3 +90,83 @@ void gs_sobel_image(int dst_idx, int src_idx) {
   if (dst_idx < 0 || dst_idx >= NUM_BUFFERS || src_idx < 0 || src_idx >= NUM_BUFFERS) return;
   gs_sobel(images[dst_idx], images[src_idx]);
 }
+
+// Blob detection functions
+static gs_label labels_buffer[640 * 480];  // Max image size buffer for labels
+static struct gs_blob blobs_buffer[200];   // Buffer for blob storage
+
+unsigned gs_detect_blobs(int src_idx, unsigned max_blobs) {
+  if (src_idx < 0 || src_idx >= NUM_BUFFERS) return 0;
+  if (max_blobs > 200) max_blobs = 200;  // Limit to buffer size
+
+  unsigned size = images[src_idx].w * images[src_idx].h;
+  for (unsigned i = 0; i < size; i++) labels_buffer[i] = 0;
+  for (unsigned i = 0; i < max_blobs; i++) blobs_buffer[i] = (struct gs_blob){0};
+
+  return gs_blobs(images[src_idx], labels_buffer, blobs_buffer, max_blobs);
+}
+
+struct gs_blob* gs_get_blob(unsigned idx) {
+  if (idx >= 200) return NULL;
+  return &blobs_buffer[idx];
+}
+
+gs_label* gs_get_labels_buffer(void) { return labels_buffer; }
+
+// FAST keypoint detection
+static struct gs_keypoint keypoints_buffer[500];
+static uint8_t scoremap_buffer[640 * 480];
+
+unsigned gs_detect_fast_keypoints(int src_idx, unsigned threshold, unsigned max_keypoints) {
+  if (src_idx < 0 || src_idx >= NUM_BUFFERS) return 0;
+  if (max_keypoints > 500) max_keypoints = 500;
+
+  struct gs_image scoremap = {images[src_idx].w, images[src_idx].h, scoremap_buffer};
+  return gs_fast(images[src_idx], scoremap, keypoints_buffer, max_keypoints, threshold);
+}
+
+struct gs_keypoint* gs_get_keypoint(unsigned idx) {
+  if (idx >= 500) return NULL;
+  return &keypoints_buffer[idx];
+}
+
+// ORB feature extraction
+static struct gs_keypoint orb_keypoints_buffer[300];
+static struct gs_keypoint template_keypoints_buffer[300];
+static struct gs_match matches_buffer[200];
+
+unsigned gs_extract_orb_features(int src_idx, unsigned threshold, unsigned max_keypoints) {
+  if (src_idx < 0 || src_idx >= NUM_BUFFERS) return 0;
+  if (max_keypoints > 300) max_keypoints = 300;
+
+  return gs_orb_extract(images[src_idx], orb_keypoints_buffer, max_keypoints, threshold,
+                        scoremap_buffer);
+}
+
+struct gs_keypoint* gs_get_orb_keypoint(unsigned idx) {
+  if (idx >= 300) return NULL;
+  return &orb_keypoints_buffer[idx];
+}
+
+void gs_store_template_keypoints(unsigned count) {
+  if (count > 300) count = 300;
+  for (unsigned i = 0; i < count; i++) { template_keypoints_buffer[i] = orb_keypoints_buffer[i]; }
+}
+
+unsigned gs_match_orb_features(unsigned template_count, unsigned scene_count, float max_distance) {
+  if (template_count > 300) template_count = 300;
+  if (scene_count > 300) scene_count = 300;
+
+  return gs_match_orb(template_keypoints_buffer, template_count, orb_keypoints_buffer, scene_count,
+                      matches_buffer, 200, max_distance);
+}
+
+struct gs_match* gs_get_match(unsigned idx) {
+  if (idx >= 200) return NULL;
+  return &matches_buffer[idx];
+}
+
+struct gs_keypoint* gs_get_template_keypoint(unsigned idx) {
+  if (idx >= 300) return NULL;
+  return &template_keypoints_buffer[idx];
+}

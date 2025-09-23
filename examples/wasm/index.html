@@ -40,6 +40,27 @@
         .pipeline-step input {
             margin: 0 5px;
         }
+
+        .template-controls {
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+            background-color: #f9f9f9;
+        }
+
+        #template-status {
+            font-weight: bold;
+            color: #007700;
+        }
+
+        .info-panel {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ccc;
+            background-color: #f5f5f5;
+            font-family: monospace;
+            font-size: 12px;
+        }
     </style>
 </head>
 
@@ -64,6 +85,27 @@
         <h3>Processing Pipeline</h3>
         <div id="pipeline-steps"></div>
         <button id="add-step">Add Step</button>
+    </div>
+
+    <div class="template-controls">
+        <h3>Object Tracking</h3>
+        <button id="capture-template">Capture Template</button>
+        <span id="template-status">No template captured</span>
+        <p>Add an "orb" step to your pipeline, then capture a template to enable object tracking.</p>
+    </div>
+
+    <div class="info-panel">
+        <h4>Available Operations:</h4>
+        <p><strong>blur</strong> - Gaussian blur filter</p>
+        <p><strong>thresh</strong> - Binary threshold</p>
+        <p><strong>adaptive</strong> - Adaptive threshold</p>
+        <p><strong>erode/dilate</strong> - Morphological operations</p>
+        <p><strong>sobel</strong> - Edge detection</p>
+        <p><strong>otsu</strong> - Automatic threshold selection</p>
+        <p><strong>blobs</strong> - Connected component analysis (red boxes)</p>
+        <p><strong>keypoints</strong> - FAST corner detection (green circles)</p>
+        <p><strong>orb</strong> - ORB features with orientation (blue circles with lines)</p>
+        <p><strong>contours</strong> - Boundary tracing (colored boxes with length info)</p>
     </div>
     <script src="grayskull.js"></script>
 </body>
