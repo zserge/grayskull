@@ -14,6 +14,20 @@ void* gs_alloc(size_t size) {
 void gs_free(void* ptr) { (void)ptr; /* No-op for bump allocator */ }
 void gs_reset_allocator(void) { heap_ptr = 0; }
 
+// Minimal standard library functions for WASM nostdlib build
+void* memset(void* s, int c, size_t n) {
+  unsigned char* p = (unsigned char*)s;
+  for (size_t i = 0; i < n; i++) p[i] = (unsigned char)c;
+  return s;
+}
+
+void* memcpy(void* dest, const void* src, size_t n) {
+  unsigned char* d = (unsigned char*)dest;
+  const unsigned char* s = (const unsigned char*)src;
+  for (size_t i = 0; i < n; i++) d[i] = s[i];
+  return dest;
+}
+
 #define gs_assert(cond)
 #define GS_NO_STDLIB
 #define GS_API
