@@ -2,7 +2,6 @@
 #define GRAYSKULL_H
 
 #include <limits.h>
-#include <math.h>
 #include <stdint.h>
 
 #ifndef GS_API
@@ -56,7 +55,27 @@ static inline int gs_valid(struct gs_image img) { return img.data && img.w > 0 &
 
 #ifdef GS_NO_STDLIB  // no asserts, no memory allocation, no file I/O
 #define gs_assert(cond)
+static inline float gs_atan2(float y, float x) {
+  if (x == 0.0f) { return (y > 0.0f ? 1.570796f : (y < 0.0f ? -1.570796f : 0.0f)); }
+  float r, angle, abs_y = (y >= 0.0f ? y : -y);
+  if (x >= 0.0f)
+    r = (x - abs_y) / (x + abs_y), angle = 0.785398f - 0.785398f * r;
+  else
+    r = (x + abs_y) / (abs_y - x), angle = 3.0f * 0.785398f - 0.785398f * r;
+  return (y < 0.0f ? -angle : angle);
+}
+
+static inline float gs_sin(float x) {
+  while (x > 3.141592f) x -= 6.283185f;
+  while (x < -3.141592f) x += 6.283185f;
+  int sign = 1;
+  if (x < 0) x = -x, sign = -1;
+  if (x > 1.570796f) x = 3.141592f - x;
+  float x2 = x * x, res = x * (1.0f - x2 * (0.16666667f - 0.0083333310f * x2));
+  return sign * res;
+}
 #else
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -65,6 +84,9 @@ static inline int gs_valid(struct gs_image img) { return img.data && img.w > 0 &
     fprintf(stderr, "Assertion failed: %s\n", #cond); \
     abort();                                          \
   }
+
+static inline float gs_atan2(float y, float x) { return atan2f(y, x); }
+static inline float gs_sin(float x) { return sinf(x); }
 
 GS_API struct gs_image gs_alloc(unsigned w, unsigned h) {
   if (w == 0 || h == 0) return (struct gs_image){0, 0, NULL};
@@ -558,21 +580,20 @@ GS_API float gs_compute_orientation(struct gs_image img, unsigned x, unsigned y,
       }
     }
   }
-  return atan2(m01, m10);
+  return gs_atan2(m01, m10);
 }
 
 GS_API void gs_brief_descriptor(struct gs_image img, struct gs_keypoint *kp) {
   gs_assert(gs_valid(img) && kp);
   int x = kp->pt.x, y = kp->pt.y;
-  float angle = kp->angle, cos_a = cos(angle), sin_a = sin(angle);
+  float angle = kp->angle, sin_a = gs_sin(angle), cos_a = gs_sin((float)(angle + 1.57079f));
   for (int i = 0; i < 8; i++) kp->descriptor[i] = 0;
   for (int i = 0; i < 256; i++) {
     float dx1 = gs_brief_pattern[i][0] * cos_a - gs_brief_pattern[i][1] * sin_a;
     float dy1 = gs_brief_pattern[i][0] * sin_a + gs_brief_pattern[i][1] * cos_a;
     float dx2 = gs_brief_pattern[i][2] * cos_a - gs_brief_pattern[i][3] * sin_a;
     float dy2 = gs_brief_pattern[i][2] * sin_a + gs_brief_pattern[i][3] * cos_a;
-    int x1 = x + (int)dx1, y1 = y + (int)dy1;
-    int x2 = x + (int)dx2, y2 = y + (int)dy2;
+    int x1 = x + (int)dx1, y1 = y + (int)dy1, x2 = x + (int)dx2, y2 = y + (int)dy2;
     uint8_t intensity1 = gs_get(img, x1, y1), intensity2 = gs_get(img, x2, y2);
     if (intensity1 > intensity2) kp->descriptor[i / 32] |= (1U << (i % 32));
   }
