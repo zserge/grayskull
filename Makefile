@@ -1,4 +1,5 @@
 CFLAGS ?= -std=c99 -Wall -Wextra -Werror -pedantic -g
+LDFLAGS ?= -lm
 
 all: test nanomagick document_scanner aruco_detector
 
@@ -32,6 +33,6 @@ testdata: nanomagick
 	./nanomagick scan testdata/receipt.pgm out/receipt.pgm
 
 nanomagick: examples/nanomagick/nanomagick.c grayskull.h
-	$(CC) $(CFLAGS) -I. -lm -o nanomagick examples/nanomagick/nanomagick.c $(LDFLAGS)
+	$(CC) $(CFLAGS) -I. -o nanomagick examples/nanomagick/nanomagick.c $(LDFLAGS)
 
 .PHONY: all test testdata
