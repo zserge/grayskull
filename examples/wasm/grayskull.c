@@ -81,9 +81,53 @@ void gs_erode_image(int dst_idx, int src_idx) {
   gs_erode(images[dst_idx], images[src_idx]);
 }
 
+void gs_erode_image_iterations(int dst_idx, int src_idx, int iterations) {
+  if (dst_idx < 0 || dst_idx >= NUM_BUFFERS || src_idx < 0 || src_idx >= NUM_BUFFERS) return;
+
+  // First iteration
+  gs_erode(images[dst_idx], images[src_idx]);
+
+  // Additional iterations (ping-pong between buffers)
+  int temp_idx = (dst_idx + 1) % NUM_BUFFERS;
+  if (temp_idx == src_idx) temp_idx = (temp_idx + 1) % NUM_BUFFERS;
+
+  for (int i = 1; i < iterations; i++) {
+    if (i % 2 == 1) {
+      gs_erode(images[temp_idx], images[dst_idx]);
+    } else {
+      gs_erode(images[dst_idx], images[temp_idx]);
+    }
+  }
+
+  // Ensure result is in dst_idx
+  if (iterations > 1 && iterations % 2 == 0) { gs_copy(images[dst_idx], images[temp_idx]); }
+}
+
 void gs_dilate_image(int dst_idx, int src_idx) {
   if (dst_idx < 0 || dst_idx >= NUM_BUFFERS || src_idx < 0 || src_idx >= NUM_BUFFERS) return;
   gs_dilate(images[dst_idx], images[src_idx]);
+}
+
+void gs_dilate_image_iterations(int dst_idx, int src_idx, int iterations) {
+  if (dst_idx < 0 || dst_idx >= NUM_BUFFERS || src_idx < 0 || src_idx >= NUM_BUFFERS) return;
+
+  // First iteration
+  gs_dilate(images[dst_idx], images[src_idx]);
+
+  // Additional iterations (ping-pong between buffers)
+  int temp_idx = (dst_idx + 1) % NUM_BUFFERS;
+  if (temp_idx == src_idx) temp_idx = (temp_idx + 1) % NUM_BUFFERS;
+
+  for (int i = 1; i < iterations; i++) {
+    if (i % 2 == 1) {
+      gs_dilate(images[temp_idx], images[dst_idx]);
+    } else {
+      gs_dilate(images[dst_idx], images[temp_idx]);
+    }
+  }
+
+  // Ensure result is in dst_idx
+  if (iterations > 1 && iterations % 2 == 0) { gs_copy(images[dst_idx], images[temp_idx]); }
 }
 
 void gs_sobel_image(int dst_idx, int src_idx) {
@@ -112,6 +156,61 @@ struct gs_blob* gs_get_blob(unsigned idx) {
 }
 
 gs_label* gs_get_labels_buffer(void) { return labels_buffer; }
+
+// Blob corners buffer
+static struct gs_point blob_corners_buffer[4];
+
+void gs_get_blob_corners(unsigned blob_idx) {
+  if (blob_idx >= 200) return;
+  gs_blob_corners(images[0], labels_buffer, &blobs_buffer[blob_idx], blob_corners_buffer);
+}
+
+struct gs_point* gs_get_blob_corner(unsigned corner_idx) {
+  if (corner_idx >= 4) return NULL;
+  return &blob_corners_buffer[corner_idx];
+}
+
+// Contour tracing for largest blob
+static struct gs_contour largest_blob_contour;
+static uint8_t contour_visited_buffer[640 * 480];
+
+void gs_trace_largest_blob_contour(int src_idx) {
+  if (src_idx < 0 || src_idx >= NUM_BUFFERS) return;
+
+  // Find largest blob
+  unsigned largest_idx = 0;
+  for (unsigned i = 1; i < 200; i++) {
+    if (blobs_buffer[i].area > blobs_buffer[largest_idx].area) { largest_idx = i; }
+  }
+
+  if (blobs_buffer[largest_idx].area == 0) return;
+
+  // Set up visited buffer
+  struct gs_image visited = {images[src_idx].w, images[src_idx].h, contour_visited_buffer};
+  for (unsigned i = 0; i < visited.w * visited.h; i++) { visited.data[i] = 0; }
+
+  // Find a starting point on the blob boundary
+  largest_blob_contour.start =
+      (struct gs_point){blobs_buffer[largest_idx].box.x, blobs_buffer[largest_idx].box.y};
+
+  // Find actual boundary point by scanning the blob's bounding box
+  for (unsigned y = blobs_buffer[largest_idx].box.y;
+       y < blobs_buffer[largest_idx].box.y + blobs_buffer[largest_idx].box.h; y++) {
+    for (unsigned x = blobs_buffer[largest_idx].box.x;
+         x < blobs_buffer[largest_idx].box.x + blobs_buffer[largest_idx].box.w; x++) {
+      if (x < images[src_idx].w && y < images[src_idx].h &&
+          images[src_idx].data[y * images[src_idx].w + x] > 128) {
+        largest_blob_contour.start = (struct gs_point){x, y};
+        goto found_start;
+      }
+    }
+  }
+
+found_start:
+  gs_trace_contour(images[src_idx], visited, &largest_blob_contour);
+}
+
+struct gs_contour* gs_get_largest_blob_contour(void) { return &largest_blob_contour; }
 
 // FAST keypoint detection
 static struct gs_keypoint keypoints_buffer[500];
@@ -170,3 +269,59 @@ struct gs_keypoint* gs_get_template_keypoint(unsigned idx) {
   if (idx >= 300) return NULL;
   return &template_keypoints_buffer[idx];
 }
+
+// Contour detection for largest blob
+static struct gs_contour contour_buffer;
+static uint8_t visited_buffer[640 * 480];
+
+int gs_detect_largest_blob_contour(int src_idx, unsigned max_blobs) {
+  if (src_idx < 0 || src_idx >= NUM_BUFFERS) return 0;
+
+  // First detect blobs
+  unsigned num_blobs = gs_detect_blobs(src_idx, max_blobs);
+  if (num_blobs == 0) return 0;
+
+  // Find largest blob
+  unsigned largest_idx = 0;
+  unsigned largest_area = blobs_buffer[0].area;
+  for (unsigned i = 1; i < num_blobs; i++) {
+    if (blobs_buffer[i].area > largest_area) {
+      largest_area = blobs_buffer[i].area;
+      largest_idx = i;
+    }
+  }
+
+  if (largest_area < 100) return 0;  // Skip very small blobs
+
+  // Initialize visited map
+  unsigned size = images[src_idx].w * images[src_idx].h;
+  for (unsigned i = 0; i < size; i++) visited_buffer[i] = 0;
+
+  struct gs_image visited = {images[src_idx].w, images[src_idx].h, visited_buffer};
+
+  // Find a starting point on the blob boundary
+  struct gs_blob* blob = &blobs_buffer[largest_idx];
+  contour_buffer.start.x = blob->box.x;
+  contour_buffer.start.y = blob->box.y;
+
+  // Find first boundary pixel
+  int found = 0;
+  for (unsigned y = blob->box.y; y < blob->box.y + blob->box.h && !found; y++) {
+    for (unsigned x = blob->box.x; x < blob->box.x + blob->box.w && !found; x++) {
+      if (labels_buffer[y * images[src_idx].w + x] == blob->label) {
+        contour_buffer.start.x = x;
+        contour_buffer.start.y = y;
+        found = 1;
+      }
+    }
+  }
+
+  if (!found) return 0;
+
+  // Trace contour
+  gs_trace_contour(images[src_idx], visited, &contour_buffer);
+
+  return contour_buffer.length > 0 ? 1 : 0;
+}
+
+struct gs_contour* gs_get_contour(void) { return &contour_buffer; }

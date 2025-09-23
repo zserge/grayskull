@@ -23,7 +23,8 @@ const operations = {
     "erode": { params: [{ name: "iterations", type: "range", default: 1, min: 1, max: 10 }] },
     "dilate": { params: [{ name: "iterations", type: "range", default: 1, min: 1, max: 10 }] },
     "blobs": { params: [{ name: "max_blobs", type: "range", default: 10, min: 1, max: 100 }] },
-    "keypoints": { params: [{ name: "threshold", type: "range", default: 100, min: 5, max: 500 }, { name: "max_points", type: "range", default: 100, min: 10, max: 500 }] },
+    "contour": { params: [] },
+    "keypoints": { params: [{ name: "threshold", type: "range", default: 10, min: 5, max: 100 }, { name: "max_points", type: "range", default: 300, min: 10, max: 2000 }] },
     "orb": { params: [{ name: "threshold", type: "range", default: 30, min: 5, max: 500 }, { name: "max_features", type: "range", default: 100, min: 10, max: 300 }] },
 };
 
@@ -286,8 +287,8 @@ function processFrame() {
                 wasm.gs_threshold_image(writeIdx, params[0]);
                 break;
             case 'adaptive': wasm.gs_adaptive_threshold_image(writeIdx, readIdx, params[0]); break;
-            case 'erode': wasm.gs_erode_image(writeIdx, readIdx); break;
-            case 'dilate': wasm.gs_dilate_image(writeIdx, readIdx); break;
+            case 'erode': wasm.gs_erode_image_iterations(writeIdx, readIdx, params[0] || 1); break;
+            case 'dilate': wasm.gs_dilate_image_iterations(writeIdx, readIdx, params[0] || 1); break;
             case 'sobel': wasm.gs_sobel_image(writeIdx, readIdx); break;
             case 'otsu':
                 const threshold = wasm.gs_otsu_threshold_image(readIdx);
@@ -298,6 +299,13 @@ function processFrame() {
                 wasm.gs_copy_image(writeIdx, readIdx);
                 const numBlobs = wasm.gs_detect_blobs(readIdx, params[0] || 10);
                 overlayData.push({ type: 'blobs', count: numBlobs });
+                break;
+            case 'contour':
+                wasm.gs_copy_image(writeIdx, readIdx);
+                const hasContour = wasm.gs_detect_largest_blob_contour(readIdx, 50);
+                if (hasContour) {
+                    overlayData.push({ type: 'contour', hasContour: true });
+                }
                 break;
             case 'keypoints':
                 wasm.gs_copy_image(writeIdx, readIdx);
@@ -345,6 +353,11 @@ function drawOverlays(overlayData, width, height) {
             case 'blobs':
                 drawBlobs(overlay.count);
                 break;
+            case 'contour':
+                if (overlay.hasContour) {
+                    drawContour();
+                }
+                break;
             case 'keypoints':
                 drawKeypoints(overlay.count, '#00ff00');
                 break;
@@ -378,7 +391,8 @@ function drawBlobs(count) {
         const centroidX = blobData[6];
         const centroidY = blobData[7];
 
-        // Draw bounding box
+        // Draw bounding box (rectangle)
+        ctx.strokeStyle = '#ff0000';
         ctx.strokeRect(x, y, w, h);
 
         // Draw centroid
@@ -390,7 +404,47 @@ function drawBlobs(count) {
         // Draw area text
         ctx.fillStyle = '#ffffff';
         ctx.fillText(`${area}`, x, y - 5);
+
+        // Draw corners
+        const cornersPtr = wasm.gs_get_blob_corners(i);
+        if (cornersPtr) {
+            ctx.fillStyle = '#00ff00';
+            const cornersData = new Uint32Array(memory.buffer, cornersPtr, 8); // 4 points, 2 coords each
+            for (let j = 0; j < 4; j++) {
+                const cornerX = cornersData[j * 2];
+                const cornerY = cornersData[j * 2 + 1];
+                ctx.beginPath();
+                ctx.arc(cornerX, cornerY, 2, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
     }
+}
+
+function drawContour() {
+    const contourPtr = wasm.gs_get_contour();
+    if (!contourPtr) return;
+
+    // Read contour data
+    const contourData = new Uint32Array(memory.buffer, contourPtr, 6); // gs_contour struct
+    const startX = contourData[4];
+    const startY = contourData[5];
+    const length = contourData[6];
+
+    if (length === 0) return;
+
+    // Draw contour as a highlighted outline
+    ctx.strokeStyle = '#ffff00';
+    ctx.lineWidth = 2;
+
+    // For simplicity, draw a circle at the start point to indicate contour detection
+    ctx.beginPath();
+    ctx.arc(startX, startY, 8, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    // Draw length text
+    ctx.fillStyle = '#ffff00';
+    ctx.fillText(`Contour: ${length}px`, startX + 10, startY - 10);
 }
 
 function drawKeypoints(count, color, withOrientation = false) {
@@ -432,6 +486,9 @@ function drawKeypoints(count, color, withOrientation = false) {
 }
 
 function drawMatches(count) {
+    // Yellow circles show ORB feature matches between the captured template and current scene
+    // Lower distance numbers indicate better matches (more similar features)
+    // Use "Capture Template" button to set a reference image for matching
     if (!templateKeypoints || count === 0) return;
 
     ctx.strokeStyle = '#ffff00';
@@ -457,13 +514,15 @@ function drawMatches(count) {
         const sceneX = sceneKpData[0];
         const sceneY = sceneKpData[1];
 
-        // Draw match indicator
+        // Draw match indicator (yellow circle = matched feature)
         ctx.fillStyle = '#ffff00';
         ctx.beginPath();
         ctx.arc(sceneX, sceneY, 5, 0, 2 * Math.PI);
         ctx.fill();
 
-        // Draw match distance
+        // Draw match distance (lower = better match)
+        ctx.fillStyle = '#000000';
+        ctx.fillText(`${distance}`, sceneX + 6, sceneY - 6);
         ctx.fillStyle = '#ffffff';
         ctx.fillText(`${distance}`, sceneX + 6, sceneY - 6);
     }
