@@ -12,7 +12,7 @@ void* gs_alloc(size_t size) {
   return ptr;
 }
 void gs_free(void* ptr) { (void)ptr; /* No-op for bump allocator */ }
-void gs_reset_allocator() { heap_ptr = 0; }
+void gs_reset_allocator(void) { heap_ptr = 0; }
 
 #define gs_assert(cond)
 #define GS_NO_STDLIB
@@ -49,7 +49,7 @@ void gs_blur_image(int dst_idx, int src_idx, int radius) {
 
 uint8_t gs_otsu_threshold_image(int src_idx) {
   if (src_idx < 0 || src_idx >= NUM_BUFFERS) return 0;
-  return gs_otsu_theshold(images[src_idx]);
+  return gs_otsu_threshold(images[src_idx]);
 }
 
 void gs_threshold_image(int img_idx, uint8_t threshold) {
