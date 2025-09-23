@@ -4,11 +4,18 @@ Grayskull is a minimalist, dependency-free alternative to OpenCV designed for mi
 
 ## Features
 
-* Image operations: copy, crop, resize (bilinear)
+* Image operations: copy, crop, resize (bilinear), downsample
 * Filtering: blur, Sobel edges, thresholding (global, Otsu, adaptive)
 * Morphology: erosion, dilation
 * Geometry: connected components, perspective warp
+* Features: FAST/ORB keypoints and descriptors (object tracking)
 * Utilities: PGM read/write
+
+As usual, no dependencies, no dynamic memory allocation, no C++, no surprises. Just a single header file under 1KLOC.
+
+Check out the [examples](examples) folder for more!
+
+[Online demo](https://zserge.com/grayskull/): try Grayskull in your browser.
 
 ## Quickstart
 
@@ -35,30 +42,44 @@ _Note that `gs_alloc`/`gs_free` are optional helpers; you can allocate image pix
 ```c
 struct gs_point { unsigned x, y; }; // corners
 struct gs_rect { unsigned x, y, w, h; }; // ROI
-struct gs_quad { struct gs_point corners[4]; };
 struct gs_image { unsigned w, h; uint8_t *data; };
 
 void gs_crop(struct gs_image dst, struct gs_image src, struct gs_rect roi);
 void gs_copy(struct gs_image dst, struct gs_image src);
 void gs_resize(struct gs_image dst, struct gs_image src);
+void gs_downsample(struct gs_image dst, struct gs_image src);
 
+// Thresholding
 void gs_histogram(struct gs_image img, unsigned hist[256]);
 void gs_threshold(struct gs_image img, uint8_t threshold);
 uint8_t gs_otsu_theshold(struct gs_image img);
 void gs_adaptive_threshold(struct gs_image dst, struct gs_image src, unsigned block_size, float c);
 
+// Filters
 void gs_blur(struct gs_image dst, struct gs_image src, int radius);
-
 void gs_erode(struct gs_image dst, struct gs_image src);
 void gs_dilate(struct gs_image dst, struct gs_image src);
-
 void gs_sobel(struct gs_image dst, struct gs_image src);
 
-unsigned gs_connected_components(struct gs_image img, gs_label *labels,
-                                        struct gs_component *comp, size_t comp_size,
-                                        gs_label *table, size_t table_size, int fullconn);
+// Blobs (connected components) and contours
+typedef uint16_t gs_label;
+struct gs_blob { gs_label label; unsigned area; struct gs_rect box; struct gs_point centroid; };
+struct gs_contour { struct gs_rect box; struct gs_point start; unsigned length; };
 
-void gs_perspective_correct(struct gs_image dst, struct gs_image src, struct gs_quad quad);
+unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *blobs, unsigned nblobs);
+void gs_blob_corners(struct gs_image img, gs_label *labels, struct gs_blob *b, struct gs_point c[4]);
+void gs_perspective_correct(struct gs_image dst, struct gs_image src, struct gs_point c[4]);
+void gs_trace_contour(struct gs_image img, struct gs_image visited, struct gs_contour *c);
+
+// FAST/ORB
+struct gs_keypoint { struct gs_point pt; unsigned response; float angle; uint32_t descriptor[8]; };
+struct gs_match { unsigned idx1, idx2; unsigned distance; };
+
+unsigned gs_fast(struct gs_image img, struct gs_image scores, struct gs_keypoint *kps, unsigned nkps, unsigned threshold);
+float gs_compute_orientation(struct gs_image img, unsigned x, unsigned y, unsigned r);
+void gs_brief_descriptor(struct gs_image img, struct gs_keypoint *kp);
+unsigned gs_orb_extract(struct gs_image img, struct gs_keypoint *kps, unsigned nkps, unsigned threshold, uint8_t *scoremap_buffer);
+unsigned gs_match_orb(const struct gs_keypoint *kps1, unsigned n1, const struct gs_keypoint *kps2, unsigned n2, struct gs_match *matches, unsigned max_matches, float max_distance);
 
 // Optional:
 struct gs_image gs_alloc(unsigned w, unsigned h);
