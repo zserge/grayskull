@@ -166,6 +166,20 @@ static void blobs(struct gs_image img, struct gs_image *out, char *argv[]) {
   gs_for(img, x, y) if (img.data[y * out->w + x] > 128) out->data[y * img.w + x] = 255;
 }
 
+static void draw_line(struct gs_image img, unsigned x1, unsigned y1, unsigned x2, unsigned y2,
+                      uint8_t color) {
+  int dx = abs((int)x2 - (int)x1), dy = abs((int)y2 - (int)y1);
+  int sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1, err = dx - dy;
+  int x = x1, y = y1;
+  while (1) {
+    if (x >= 0 && x < (int)img.w && y >= 0 && y < (int)img.h) img.data[y * img.w + x] = color;
+    if (x == (int)x2 && y == (int)y2) break;
+    int e2 = 2 * err;
+    if (e2 > -dy) err -= dy, x += sx;
+    if (e2 < dx) err += dx, y += sy;
+  }
+}
+
 static void scan(struct gs_image img, struct gs_image *out, char *argv[]) {
   (void)argv;
   struct gs_image tmp = gs_alloc(img.w, img.h);
@@ -183,13 +197,148 @@ static void scan(struct gs_image img, struct gs_image *out, char *argv[]) {
   // find corners
   struct gs_point corners[4];
   gs_blob_corners(tmp, labels, &blobs[largest], corners);
-	// perspective correct
-	const unsigned OUTPUT_WIDTH = 800, OUTPUT_HEIGHT = 1000;
-	*out = gs_alloc(OUTPUT_WIDTH, OUTPUT_HEIGHT);
-	gs_perspective_correct(*out, img, corners);
+  // perspective correct
+  const unsigned OUTPUT_WIDTH = 800, OUTPUT_HEIGHT = 1000;
+  *out = gs_alloc(OUTPUT_WIDTH, OUTPUT_HEIGHT);
+  gs_perspective_correct(*out, img, corners);
 
-	gs_free(tmp);
-	free(labels);
+  gs_free(tmp);
+  free(labels);
+}
+static int sort_keypoints(const void *a, const void *b) {
+  const struct gs_keypoint *kp1 = (const struct gs_keypoint *)a,
+                           *kp2 = (const struct gs_keypoint *)b;
+  return kp2->response - kp1->response;
+}
+
+static void keypoints(struct gs_image img, struct gs_image *out, char *argv[]) {
+  int n = atoi(argv[0]), t = atoi(argv[1]);
+  if (n <= 0 || t < 0) {
+    fprintf(stderr, "Error: Invalid number of keypoints or threshold\n");
+    return;
+  }
+  struct gs_keypoint *kps = (struct gs_keypoint *)calloc(5000, sizeof(struct gs_keypoint));
+  if (!kps) {
+    fprintf(stderr, "Error: Memory allocation failed\n");
+    return;
+  }
+  struct gs_image tmp = gs_alloc(img.w, img.h);
+  unsigned nkps = gs_fast(img, tmp, kps, 5000, t);
+  // sort keypoints by response (score)
+  qsort(kps, nkps, sizeof(struct gs_keypoint), sort_keypoints);
+
+  *out = gs_alloc(img.w, img.h);
+  gs_copy(*out, img);
+  for (unsigned i = 0; i < GS_MIN((unsigned)n, nkps); i++) {
+    unsigned x = kps[i].pt.x, y = kps[i].pt.y, r = 2;
+    for (int dy = -r; dy <= (int)r; dy++) gs_set(*out, x, y + dy, 255);
+    for (int dx = -r; dx <= (int)r; dx++) gs_set(*out, x + dx, y, 255);
+  }
+  gs_free(tmp);
+  free(kps);
+}
+
+// Pyramid ORB extraction for nanomagick
+static unsigned extract_pyramid_orb_nm(struct gs_image img, struct gs_keypoint *kps, unsigned nkps,
+                                       unsigned threshold, uint8_t *buffer, unsigned n_levels) {
+  if (n_levels > 4) n_levels = 4;
+  struct gs_image pyramid[4];
+  uint8_t *scoremaps[4];
+  unsigned total_kps = 0, buffer_offset = 0;
+
+  pyramid[0] = img;
+
+  // Generate downsampled levels
+  for (unsigned level = 1; level < n_levels; level++) {
+    unsigned w = pyramid[level - 1].w / 2, h = pyramid[level - 1].h / 2;
+    if (w < 32 || h < 32) {
+      n_levels = level;
+      break;
+    }
+    pyramid[level] = (struct gs_image){w, h, buffer + buffer_offset};
+    buffer_offset += w * h;
+    gs_downsample(pyramid[level - 1], pyramid[level]);
+  }
+
+  // Allocate scoremap buffers
+  for (unsigned level = 0; level < n_levels; level++) {
+    scoremaps[level] = buffer + buffer_offset;
+    buffer_offset += pyramid[level].w * pyramid[level].h;
+  }
+
+  // Extract features from each level
+  for (unsigned level = 0; level < n_levels; level++) {
+    unsigned level_nkps = nkps / n_levels;
+    if (level == n_levels - 1) level_nkps = nkps - total_kps;
+    if (level_nkps == 0) continue;
+
+    unsigned level_kps =
+        gs_orb_extract(pyramid[level], &kps[total_kps], level_nkps, threshold, scoremaps[level]);
+
+    // Scale coordinates back to original image size
+    unsigned scale = 1 << level;
+    for (unsigned i = total_kps; i < total_kps + level_kps; i++) {
+      kps[i].pt.x *= scale;
+      kps[i].pt.y *= scale;
+    }
+    total_kps += level_kps;
+  }
+  return total_kps;
+}
+
+static void orb(struct gs_image img, struct gs_image *out, char *argv[]) {
+  struct gs_image template = gs_read_pgm(argv[0]);
+  if (!gs_valid(template)) {
+    printf("Error: Cannot load template image %s\n", argv[0]);
+    return;
+  }
+
+  static uint8_t buffer[1024 * 1024];
+  static struct gs_keypoint template_kps[5000], scene_kps[5000];
+  static struct gs_match matches[300];
+
+  // Extract pyramid ORB features
+  unsigned n_template = extract_pyramid_orb_nm(template, template_kps, 2500, 20, buffer, 3);
+  unsigned n_scene = extract_pyramid_orb_nm(img, scene_kps, 2500, 20, buffer, 3);
+
+  unsigned n_matches =
+      gs_match_orb(template_kps, n_template, scene_kps, n_scene, matches, 300, 60.0f);
+
+  printf("Template: %u keypoints, Scene: %u keypoints, Matches: %u\n", n_template, n_scene,
+         n_matches);
+
+  if (n_matches > 0) {
+    // Sort matches by distance
+    for (unsigned i = 0; i < n_matches - 1; i++)
+      for (unsigned j = i + 1; j < n_matches; j++)
+        if (matches[j].distance < matches[i].distance) {
+          struct gs_match temp = matches[i];
+          matches[i] = matches[j];
+          matches[j] = temp;
+        }
+
+    // Create stitched output
+    *out = gs_alloc(template.w + img.w, GS_MAX(template.h, img.h));
+    for (unsigned i = 0; i < out->w * out->h; i++) out->data[i] = 0;
+
+    // Stitch images
+    for (unsigned y = 0; y < template.h; y++)
+      for (unsigned x = 0; x < template.w; x++)
+        out->data[y * out->w + x] = template.data[y * template.w + x];
+    for (unsigned y = 0; y < img.h; y++)
+      for (unsigned x = 0; x < img.w; x++)
+        out->data[y * out->w + (template.w + x)] = img.data[y * img.w + x];
+
+    // Draw top matches
+    unsigned draw_matches = GS_MIN(15, n_matches);
+    for (unsigned i = 0; i < draw_matches; i++) {
+      unsigned x1 = template_kps[matches[i].idx1].pt.x, y1 = template_kps[matches[i].idx1].pt.y;
+      unsigned x2 = scene_kps[matches[i].idx2].pt.x + template.w,
+               y2 = scene_kps[matches[i].idx2].pt.y;
+      draw_line(*out, x1, y1, x2, y2, 255);
+    }
+  }
+  gs_free(template);
 }
 
 struct cmd {
@@ -210,6 +359,8 @@ struct cmd {
     {"morph", "<op> <n>        Morphological operation (erode/dilate) N times", 2, 1, morph},
     {"blobs", "<n>             Find up to N blobs", 1, 1, blobs},
     {"scan", "                 Simple document scanner", 0, 1, scan},
+    {"keypoints", "<n> <t>     Detect N keypoints with threshold T", 2, 1, keypoints},
+    {"orb", "<template.pgm>    Find template in scene using ORB features", 1, 1, orb},
     {NULL, NULL, 0, 0, NULL},
 };
 
