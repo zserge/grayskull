@@ -257,7 +257,7 @@ static unsigned extract_pyramid_orb_nm(struct gs_image img, struct gs_keypoint *
     }
     pyramid[level] = (struct gs_image){w, h, buffer + buffer_offset};
     buffer_offset += w * h;
-    gs_downsample(pyramid[level - 1], pyramid[level]);
+    gs_downsample(pyramid[level], pyramid[level - 1]);
   }
 
   // Allocate scoremap buffers

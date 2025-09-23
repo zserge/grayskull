@@ -168,7 +168,7 @@ GS_API void gs_resize(struct gs_image dst, struct gs_image src) {
   }
 }
 
-GS_API void gs_downsample(struct gs_image src, struct gs_image dst) {
+GS_API void gs_downsample(struct gs_image dst, struct gs_image src) {
   gs_assert(gs_valid(src) && gs_valid(dst) && dst.w == src.w / 2 && dst.h == src.h / 2);
   gs_for(dst, x, y) {
     unsigned src_x = x * 2, src_y = y * 2;
