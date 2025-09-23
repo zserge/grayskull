@@ -35,4 +35,9 @@ testdata: nanomagick
 nanomagick: examples/nanomagick/nanomagick.c grayskull.h
 	$(CC) $(CFLAGS) -I. -o nanomagick examples/nanomagick/nanomagick.c $(LDFLAGS)
 
+wasm: examples/wasm/grayskull.c grayskull.h
+	clang \
+		--target=wasm32 -O3 -flto -nostdlib -Wl,--no-entry -Wl,--export-all -Wl,--lto-O3 -DNDEBUG \
+		-I. -o examples/wasm/grayskull.wasm examples/wasm/grayskull.c
+
 .PHONY: all test testdata

@@ -467,7 +467,8 @@ GS_API unsigned gs_fast(struct gs_image img, struct gs_image scoremap, struct gs
         if (run >= 9 || run <= -9) {
           score = 255;
           for (int j = 0; j < 16; j++) {
-            int d = abs(img.data[(y + dy[j]) * img.w + (x + dx[j])] - p);
+            int d = gs_get(img, x + dx[j], y + dy[j]) - p;
+            if (d < 0) d = -d;
             if (d < score) score = d;
           }
           break;
