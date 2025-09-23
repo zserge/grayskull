@@ -32,6 +32,6 @@ testdata: nanomagick
 	./nanomagick scan testdata/receipt.pgm out/receipt.pgm
 
 nanomagick: examples/nanomagick/nanomagick.c grayskull.h
-	$(CC) $(CFLAGS) -I. -o nanomagick examples/nanomagick/nanomagick.c $(LDFLAGS)
+	$(CC) $(CFLAGS) -I. -lm -o nanomagick examples/nanomagick/nanomagick.c $(LDFLAGS)
 
 .PHONY: all test testdata
