@@ -40,8 +40,19 @@ function grayToRgba(gray, rgba) {
 async function init() {
     try {
         const importObject = { env: {} };
-        const { instance } = await WebAssembly.instantiateStreaming(fetch('grayskull.wasm'), importObject);
-        wasm = instance.exports;
+        // Fallback for WASM loading if streaming fails (MIME type issues)
+        let wasmModule;
+        try {
+            const { instance } = await WebAssembly.instantiateStreaming(fetch('grayskull.wasm'), importObject);
+            wasmModule = instance;
+        } catch (streamError) {
+            console.warn("Streaming failed, trying fallback:", streamError);
+            const response = await fetch('grayskull.wasm');
+            const bytes = await response.arrayBuffer();
+            const { instance } = await WebAssembly.instantiate(bytes, importObject);
+            wasmModule = instance;
+        }
+        wasm = wasmModule.exports;
         memory = wasm.memory;
         console.log("WebAssembly module loaded.");
     } catch (e) {
@@ -60,9 +71,31 @@ async function populateCameraList() {
         if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
             throw new Error("Media device enumeration not supported.");
         }
+
+        // Request camera permission first to get device labels
+        let permissionStream;
+        try {
+            permissionStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        } catch (permError) {
+            console.warn("Could not get camera permission for labeling:", permError);
+        }
+
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+        // Stop the permission stream
+        if (permissionStream) {
+            permissionStream.getTracks().forEach(track => track.stop());
+        }
+
         cameraSelect.innerHTML = '';
+        if (videoDevices.length === 0) {
+            const option = document.createElement('option');
+            option.textContent = 'No cameras found';
+            cameraSelect.appendChild(option);
+            return;
+        }
+
         videoDevices.forEach((device, i) => {
             const option = document.createElement('option');
             option.value = device.deviceId;
@@ -71,20 +104,37 @@ async function populateCameraList() {
         });
     } catch (error) {
         console.error("Could not enumerate video devices:", error);
-        alert("Could not access cameras. Please ensure you've granted permission.");
+        // Add a fallback option
+        cameraSelect.innerHTML = '<option value="">Default Camera</option>';
     }
 }
 
 startButton.onclick = async () => {
     if (videoStream) stopCamera();
     try {
-        const constraints = { video: { deviceId: { exact: cameraSelect.value }, width: 320, height: 240 } };
+        // More flexible constraints - prefer 320x240 but allow fallback
+        const constraints = {
+            video: {
+                width: { ideal: 320, min: 160, max: 640 },
+                height: { ideal: 240, min: 120, max: 480 },
+                frameRate: { ideal: 30, max: 60 }
+            }
+        };
+
+        // Add device constraint if a specific camera is selected
+        const selectedDeviceId = cameraSelect.value;
+        if (selectedDeviceId) {
+            constraints.video.deviceId = { ideal: selectedDeviceId };
+        }
+
         videoStream = await navigator.mediaDevices.getUserMedia(constraints);
         video.srcObject = videoStream;
         await video.play();
 
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
+
+        console.log(`Video resolution: ${canvas.width}x${canvas.height}`);
 
         if (wasm) {
             wasm.gs_reset_allocator();
@@ -99,7 +149,7 @@ startButton.onclick = async () => {
         stopButton.disabled = false;
     } catch (error) {
         console.error("Failed to start camera:", error);
-        alert(`Could not start camera. Your camera might not support the requested resolution (320x240). Error: ${error.message}`);
+        alert(`Could not start camera. Error: ${error.message}`);
     }
 };
 

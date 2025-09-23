@@ -43,6 +43,7 @@ jobs:
           cp examples/wasm/grayskull.wasm _site/
           cp examples/wasm/*.html _site/
           cp examples/wasm/*.js _site/
+          touch _site/.nojekyll
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
