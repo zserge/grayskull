@@ -2,6 +2,7 @@
 #define GRAYSKULL_H
 
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 
 #ifndef GS_API
@@ -35,7 +36,15 @@ struct gs_contour {
 };
 
 struct gs_keypoint {
-  unsigned x, y, score;
+  struct gs_point pt;
+  unsigned response;
+  float angle;
+  uint32_t descriptor[8];
+};
+
+struct gs_match {
+  unsigned idx1, idx2;
+  unsigned distance;
 };
 
 struct gs_image {
@@ -97,6 +106,13 @@ GS_API int gs_write_pgm(struct gs_image img, const char *path) {
   for (unsigned y = 0; y < (img).h; y++) \
     for (unsigned x = 0; x < (img).w; x++)
 
+GS_API uint8_t gs_get(struct gs_image img, unsigned x, unsigned y) {
+  return (gs_valid(img) && x < img.w && y < img.h) ? img.data[y * img.w + x] : 0;
+}
+GS_API void gs_set(struct gs_image img, unsigned x, unsigned y, uint8_t value) {
+  if (gs_valid(img) && x < img.w && y < img.h) img.data[y * img.w + x] = value;
+}
+
 //
 // Image processing
 //
@@ -127,6 +143,16 @@ GS_API void gs_resize(struct gs_image dst, struct gs_image src) {
     uint8_t c11 = src.data[sy1 * src.w + sx1];
     dst.data[y * dst.w + x] = (uint8_t)((c00 * (1 - dx) * (1 - dy)) + (c01 * dx * (1 - dy)) +
                                         (c10 * (1 - dx) * dy) + (c11 * dx * dy));
+  }
+}
+
+GS_API void gs_downsample(struct gs_image src, struct gs_image dst) {
+  gs_assert(gs_valid(src) && gs_valid(dst) && dst.w == src.w / 2 && dst.h == src.h / 2);
+  gs_for(dst, x, y) {
+    unsigned src_x = x * 2, src_y = y * 2;
+    unsigned sum = gs_get(src, src_x, src_y) + gs_get(src, src_x + 1, src_y) +
+                   gs_get(src, src_x, src_y + 1) + gs_get(src, src_x + 1, src_y + 1);
+    gs_set(dst, x, y, (uint8_t)(sum / 4));
   }
 }
 
@@ -442,8 +468,174 @@ GS_API unsigned gs_fast(struct gs_image img, struct gs_image scoremap, struct gs
           }
         }
       }
-      if (is_max && n < nkps) kps[n++] = (struct gs_keypoint){x, y, (unsigned)s};
+      if (is_max && n < nkps) kps[n++] = (struct gs_keypoint){{x, y}, (unsigned)s, 0, {0}};
     }
+  }
+  return n;
+}
+
+//
+// ORB (Oriented FAST and Rotated BRIEF)
+//
+
+// clang-format: off
+static const int gs_brief_pattern[256][4] = {
+    {1, 0, 1, 3},       {0, 0, 3, 2},       {-1, 1, -1, -1},     {0, -4, -3, -1},
+    {-2, 1, -2, -3},    {3, 0, 0, -3},      {-1, 0, -2, 1},      {-1, -1, -1, 4},
+    {0, -2, 2, -2},     {0, -4, -3, 0},     {1, 0, 0, -1},       {-3, -1, -1, 2},
+    {1, -4, 1, -1},     {-1, 1, 2, 2},      {-2, -1, 1, 2},      {-1, 0, -2, -2},
+    {2, 3, 0, 2},       {1, -1, 1, 3},      {0, 3, -5, 2},       {0, -1, 0, -4},
+    {0, 1, 3, -1},      {-2, -1, 2, 1},     {-1, 1, 0, 2},       {-1, -1, -1, -3},
+    {1, 1, 0, 0},       {-3, -1, -1, -2},   {0, 1, 4, 0},        {1, 0, -4, 0},
+    {0, 5, 0, 1},       {0, -2, 2, 2},      {2, -2, 3, -3},      {1, 4, -2, -1},
+    {0, -1, -3, 0},     {-2, 1, -2, 3},     {-2, -1, 2, -2},     {0, 3, -3, 0},
+    {1, 2, -2, -3},     {1, 1, 1, 1},       {-1, 0, 1, -1},      {4, 1, -2, 1},
+    {-2, 2, 2, -2},     {2, 1, 2, 4},       {0, -2, -2, -2},     {0, 1, 1, 2},
+    {0, 3, -1, 5},      {1, -2, -2, 1},     {0, 1, 1, 0},        {-2, -3, -1, 2},
+    {0, -2, 0, 1},      {-2, 0, 0, -2},     {1, 1, 2, 2},        {-3, -2, 1, 1},
+    {1, 8, 1, 2},       {2, 1, -1, 2},      {-2, 0, -1, 0},      {5, -4, 1, -3},
+    {-1, 2, 0, -2},     {-1, 1, -1, 0},     {0, -1, 4, 1},       {-4, 0, -1, 2},
+    {-2, 0, 1, 2},      {-2, -1, -1, -1},   {4, 1, -3, 2},       {4, 2, -3, -1},
+    {3, -1, 1, 2},      {-2, 0, -6, -2},    {-1, -2, 3, -3},     {-1, 0, 3, -3},
+    {2, 0, -2, 1},      {0, -1, 0, -1},     {0, 1, 3, -2},       {4, -4, 0, 1},
+    {1, -1, 0, -1},     {-1, 2, 1, -1},     {2, 1, 2, 1},        {-2, -1, 1, 1},
+    {0, 0, 3, -1},      {1, 0, 0, 2},       {2, 2, 3, 0},        {1, -1, 1, 0},
+    {0, 1, -2, 4},      {-2, -2, 2, 2},     {1, 1, 0, -2},       {0, -1, 2, 0},
+    {-2, -1, 1, -1},    {-2, 0, 0, -1},     {-1, 0, -3, -3},     {-1, 0, 1, 3},
+    {2, 0, 0, -2},      {0, -1, 1, -2},     {1, 3, 0, 1},        {1, -1, 0, 0},
+    {0, -2, 0, 1},      {3, 2, 4, -2},      {2, 0, 4, -2},       {-2, -1, -4, -1},
+    {-2, 0, 1, 4},      {2, -1, -2, 1},     {-3, 4, 2, -1},      {-3, 3, 0, 2},
+    {-3, -1, 0, 0},     {-1, 1, -2, 0},     {0, 1, 1, -2},       {-3, 3, 1, -1},
+    {3, 0, 2, 0},       {4, 4, 0, 2},       {1, 3, -2, 1},       {2, -4, -2, -4},
+    {-1, 1, 3, 0},      {3, -3, -3, 0},     {1, 0, -4, 0},       {-3, 1, 1, -2},
+    {-1, -2, 0, 2},     {-2, 1, -1, -2},    {0, -2, -1, -2},     {4, 0, -1, 0},
+    {0, 0, 1, 2},       {-1, -1, -1, -5},   {-3, 3, 3, 0},       {1, 1, 6, 2},
+    {0, -2, -3, 0},     {-2, -3, -1, -2},   {3, 2, 0, 3},        {0, -2, 3, 1},
+    {-2, 0, -2, -3},    {2, 4, -3, 1},      {-1, -1, -1, -2},    {0, -2, 1, 0},
+    {15, -10, -14, 4},  {12, -5, -12, -1},  {-10, 6, 1, 14},     {8, -10, 3, 14},
+    {9, -14, -1, -5},   {-8, 10, 3, -3},    {-4, -11, -10, 10},  {6, -12, 3, 4},
+    {-15, 4, 1, -4},    {-1, -15, 10, -2},  {-10, -11, 14, -5},  {15, -12, -3, -5},
+    {-13, -15, -10, 2}, {8, -6, -11, 7},    {-6, -4, -14, -3},   {-8, -14, 4, -15},
+    {15, -11, -7, 1},   {-7, -5, -1, 8},    {-10, 7, -13, 14},   {15, 1, -11, 14},
+    {12, -4, 2, -2},    {5, 8, -5, -7},     {-14, -4, -13, -13}, {-15, -8, 6, 12},
+    {13, -8, -5, -7},   {-11, -2, 12, 14},  {-13, 5, -11, -11},  {3, 11, -2, 10},
+    {14, -12, 9, -3},   {-6, 9, 2, -8},     {-8, -9, -8, -2},    {3, 13, -10, -15},
+    {7, 15, -1, -15},   {9, 1, -15, -1},    {7, -14, -2, 5},     {-8, -8, 3, -9},
+    {3, -10, -10, -13}, {-9, 3, -8, -6},    {4, -1, -1, 13},     {-15, 4, 14, -9},
+    {11, -12, 13, -10}, {9, -15, 13, -11},  {11, 7, -15, 14},    {-12, 6, -14, -6},
+    {-11, 11, -6, -15}, {6, -10, -3, 15},   {-1, -12, -3, 8},    {4, 8, -1, 13},
+    {-8, -11, 13, -1},  {-12, -4, -3, -14}, {11, 15, 3, 3},      {-12, -12, 10, -5},
+    {11, -11, 4, -5},   {14, -6, -8, -10},  {-10, -8, 7, -1},    {10, -2, -5, -4},
+    {10, -3, -8, 14},   {2, 9, -15, -1},    {-8, 12, -5, -4},    {-4, -12, 0, -12},
+    {-11, 8, -11, -8},  {15, -6, 1, 12},    {15, 10, -7, 6},     {3, 13, -2, -8},
+    {11, -7, 0, 3},     {1, 3, -6, 11},     {1, 5, -7, 7},       {3, 11, -10, -7},
+    {-2, 1, 12, -6},    {-7, 1, -12, -7},   {1, -1, -4, -2},     {3, 1, 1, -5},
+    {1, 5, -4, 0},      {-14, 4, 6, -7},    {3, 8, -2, 5},       {-6, 3, -7, 10},
+    {-5, -5, 3, -5},    {-3, 9, -11, -2},   {-8, 1, 1, -8},      {-1, 2, 0, -2},
+    {4, -3, 3, -8},     {8, -12, -11, 7},   {0, 9, -4, 0},       {-5, 8, 7, -6},
+    {-2, -9, 12, -1},   {3, -9, 14, -5},    {-2, 2, 5, 3},       {-1, -10, 9, 9},
+    {-8, -10, 9, -6},   {-5, 8, -8, 10},    {1, -1, 1, -6},      {4, -5, 4, -1},
+    {9, 8, 9, -1},      {3, 7, -8, -1},     {-4, -11, 1, 7},     {-9, 5, 2, -2},
+    {-4, -10, -12, -2}, {-12, 0, -2, 1},    {-1, -8, 2, 2},      {0, 5, 0, 11},
+    {-10, 0, 5, -8},    {1, -7, -4, 5},     {6, 13, 0, -2},      {1, -2, 6, -4},
+    {-9, -7, -11, 9},   {9, 11, -1, 8},     {4, 7, 7, -11},      {8, 12, -10, 2},
+    {-3, 5, -2, -7},    {-9, 2, 2, 1},      {1, 0, 1, 1},        {2, -5, 4, -14},
+    {-11, -1, 2, -1},   {-7, -9, -2, -11},  {10, -1, -8, -11},   {10, 3, 10, 3},
+    {9, 0, -9, 1},      {4, 4, 4, 11},      {-2, 1, 0, -12},     {-2, 0, -5, -7},
+    {-7, 8, -9, 1},     {-13, -3, -6, 4},   {3, -9, -4, -7},     {-11, -1, 5, -5},
+    {-7, 2, 15, 0},     {-3, 2, 13, 6},     {1, 0, 2, 1},        {-7, -4, -4, 3}};
+// clang-format: on
+
+GS_API float gs_compute_orientation(struct gs_image img, unsigned x, unsigned y, unsigned r) {
+  gs_assert(gs_valid(img) && x >= r && y >= r && x < img.w - r && y < img.h - r);
+  float m01 = 0, m10 = 0;
+  for (int dy = -(int)r; dy <= (int)r; dy++) {
+    for (int dx = -(int)r; dx <= (int)r; dx++) {
+      if (dx * dx + dy * dy <= (int)(r * r)) {
+        uint8_t intensity = img.data[(y + dy) * img.w + (x + dx)];
+        m01 += dy * intensity;
+        m10 += dx * intensity;
+      }
+    }
+  }
+  return atan2(m01, m10);
+}
+
+GS_API void gs_brief_descriptor(struct gs_image img, struct gs_keypoint *kp) {
+  gs_assert(gs_valid(img) && kp);
+  int x = kp->pt.x, y = kp->pt.y;
+  float angle = kp->angle, cos_a = cos(angle), sin_a = sin(angle);
+  for (int i = 0; i < 8; i++) kp->descriptor[i] = 0;
+  for (int i = 0; i < 256; i++) {
+    float dx1 = gs_brief_pattern[i][0] * cos_a - gs_brief_pattern[i][1] * sin_a;
+    float dy1 = gs_brief_pattern[i][0] * sin_a + gs_brief_pattern[i][1] * cos_a;
+    float dx2 = gs_brief_pattern[i][2] * cos_a - gs_brief_pattern[i][3] * sin_a;
+    float dy2 = gs_brief_pattern[i][2] * sin_a + gs_brief_pattern[i][3] * cos_a;
+    int x1 = x + (int)dx1, y1 = y + (int)dy1;
+    int x2 = x + (int)dx2, y2 = y + (int)dy2;
+    uint8_t intensity1 = gs_get(img, x1, y1), intensity2 = gs_get(img, x2, y2);
+    if (intensity1 > intensity2) kp->descriptor[i / 32] |= (1U << (i % 32));
+  }
+}
+
+static void gs_sort_keypoints(struct gs_keypoint *kps, unsigned n) {
+  for (unsigned i = 0; i < n - 1; i++) {
+    for (unsigned j = 0; j < n - 1 - i; j++) {
+      if (kps[j].response < kps[j + 1].response) {
+        struct gs_keypoint temp = kps[j];
+        kps[j] = kps[j + 1];
+        kps[j + 1] = temp;
+      }
+    }
+  }
+}
+
+GS_API unsigned gs_orb_extract(struct gs_image img, struct gs_keypoint *kps, unsigned nkps,
+                               unsigned threshold, uint8_t *scoremap_buffer) {
+  gs_assert(gs_valid(img) && kps && nkps > 0 && scoremap_buffer);
+  struct gs_image scoremap = {img.w, img.h, scoremap_buffer};
+  static struct gs_keypoint candidates[5000];
+  unsigned n_fast = gs_fast(img, scoremap, candidates, GS_MIN(nkps * 4, 5000), threshold);
+  if (n_fast > 1) gs_sort_keypoints(candidates, n_fast);
+  unsigned n_orb = 0, radius = 15;
+  for (unsigned i = 0; i < n_fast && n_orb < nkps; i++) {
+    unsigned x = candidates[i].pt.x, y = candidates[i].pt.y;
+    if (x >= radius && y >= radius && x < img.w - radius && y < img.h - radius) {
+      kps[n_orb] = candidates[i];
+      kps[n_orb].angle = gs_compute_orientation(img, x, y, radius);
+      gs_brief_descriptor(img, &kps[n_orb]);
+      n_orb++;
+    }
+  }
+  return n_orb;
+}
+
+static inline unsigned gs_hamming_distance(const uint32_t desc1[8], const uint32_t desc2[8]) {
+  unsigned dist = 0;
+  for (int i = 0; i < 8; i++) {
+    uint32_t xor = desc1[i] ^ desc2[i];
+    while (xor) dist += xor&1, xor>>= 1;
+  }
+  return dist;
+}
+
+GS_API unsigned gs_match_orb(const struct gs_keypoint *kps1, unsigned n1,
+                             const struct gs_keypoint *kps2, unsigned n2, struct gs_match *matches,
+                             unsigned max_matches, float max_distance) {
+  gs_assert(kps1 && kps2 && matches);
+  unsigned n = 0;
+  for (unsigned i = 0; i < n1 && n < max_matches; i++) {
+    float best_dist = max_distance + 1, second_best = max_distance + 1;
+    unsigned best_idx = 0;
+    for (unsigned j = 0; j < n2; j++) {
+      float d = gs_hamming_distance(kps1[i].descriptor, kps2[j].descriptor);
+      if (d < best_dist)
+        second_best = best_dist, best_dist = d, best_idx = j;
+      else if (d < second_best)
+        second_best = d;
+    }
+    if (best_dist <= max_distance && best_dist < 0.8f * second_best)
+      matches[n++] = (struct gs_match){i, best_idx, (unsigned)best_dist};
   }
   return n;
 }
