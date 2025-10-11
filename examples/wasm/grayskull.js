@@ -26,6 +26,7 @@ const operations = {
     "contour": { params: [] },
     "keypoints": { params: [{ name: "threshold", type: "range", default: 10, min: 5, max: 100 }, { name: "max_points", type: "range", default: 300, min: 10, max: 2000 }] },
     "orb": { params: [{ name: "threshold", type: "range", default: 30, min: 5, max: 500 }, { name: "max_features", type: "range", default: 100, min: 10, max: 300 }] },
+    "faces": { params: [{ name: "min_neighbors", type: "range", default: 1, min: 0, max: 10 }] },
 };
 
 // --- Grayscale Conversion in JavaScript ---
@@ -323,6 +324,11 @@ function processFrame() {
                     overlayData.push({ type: 'matches', count: numMatches });
                 }
                 break;
+            case 'faces':
+                wasm.gs_copy_image(writeIdx, readIdx);
+                const numFaces = wasm.gs_detect_faces(readIdx, params[0] || 1);
+                overlayData.push({ type: 'faces', count: numFaces });
+                break;
         }
         // Swap buffers
         [readIdx, writeIdx] = [writeIdx, (writeIdx + 1) % 3 === readIdx ? (writeIdx + 2) % 3 : (writeIdx + 1) % 3];
@@ -366,6 +372,9 @@ function drawOverlays(overlayData, width, height) {
                 break;
             case 'matches':
                 drawMatches(overlay.count);
+                break;
+            case 'faces':
+                drawFaces(overlay.count);
                 break;
         }
     });
@@ -525,6 +534,31 @@ function drawMatches(count) {
         ctx.fillText(`${distance}`, sceneX + 6, sceneY - 6);
         ctx.fillStyle = '#ffffff';
         ctx.fillText(`${distance}`, sceneX + 6, sceneY - 6);
+    }
+}
+
+function drawFaces(count) {
+    ctx.strokeStyle = '#00ff00';
+    ctx.lineWidth = 2;
+
+    for (let i = 0; i < count; i++) {
+        const facePtr = wasm.gs_get_face(i);
+        if (!facePtr) continue;
+
+        // Read rect data (x, y, w, h)
+        const rectData = new Uint32Array(memory.buffer, facePtr, 4);
+        const x = rectData[0];
+        const y = rectData[1];
+        const w = rectData[2];
+        const h = rectData[3];
+
+        // Draw rectangle
+        ctx.strokeRect(x, y, w, h);
+
+        // Draw label
+        ctx.fillStyle = '#00ff00';
+        ctx.font = '14px monospace';
+        ctx.fillText(`Face ${i + 1}`, x, y - 5);
     }
 }
 

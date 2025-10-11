@@ -32,6 +32,7 @@ void* memcpy(void* dest, const void* src, size_t n) {
 #define GS_NO_STDLIB
 #define GS_API
 #include "../../grayskull.h"
+#include "../nanomagick/frontalface.h"
 
 #define NUM_BUFFERS 3
 static struct gs_image images[NUM_BUFFERS];
@@ -325,3 +326,21 @@ int gs_detect_largest_blob_contour(int src_idx, unsigned max_blobs) {
 }
 
 struct gs_contour* gs_get_contour(void) { return &contour_buffer; }
+
+// LBP Face detection
+static uint32_t integral_buffer[640 * 480];
+static struct gs_rect faces_buffer[100];
+
+unsigned gs_detect_faces(int src_idx, int min_neighbors) {
+  if (src_idx < 0 || src_idx >= NUM_BUFFERS) return 0;
+  if (images[src_idx].w * images[src_idx].h > 640 * 480) return 0;
+
+  gs_integral(images[src_idx], integral_buffer);
+  return gs_lbp_detect(&frontalface, integral_buffer, images[src_idx].w, images[src_idx].h,
+                       faces_buffer, 100, 1.2f, 1.0f, 4.0f, min_neighbors);
+}
+
+struct gs_rect* gs_get_face(unsigned idx) {
+  if (idx >= 100) return NULL;
+  return &faces_buffer[idx];
+}
