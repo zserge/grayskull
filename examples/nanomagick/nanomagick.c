@@ -6,6 +6,9 @@
 
 #include "grayskull.h"
 
+// face detection data from opencv lbpcascade_frontalface.xml cascade
+#include "frontalface.h"
+
 static void identify(struct gs_image img, struct gs_image *out, char *argv[]) {
   (void)out, (void)argv;
   printf("Portable Graymap, %ux%u (%u) pixels\n", img.w, img.h, img.w * img.h);
@@ -341,6 +344,37 @@ static void orb(struct gs_image img, struct gs_image *out, char *argv[]) {
   gs_free(template);
 }
 
+static void faces(struct gs_image img, struct gs_image *out, char *argv[]) {
+  static uint32_t integral[640 * 480];  // Max typical image size
+  static struct gs_rect rects[100];
+
+  int min_neighbors = argv[0] ? atoi(argv[0]) : 1;
+  if (min_neighbors <= 0) {
+    fprintf(stderr, "Error: minimum neighbors must be positive\n");
+    return;
+  }
+
+  if (img.w * img.h > 640 * 480) {
+    fprintf(stderr, "Error: Image too large for face detection (max 640x480)\n");
+    return;
+  }
+
+  gs_integral(img, integral);
+  unsigned nrects = gs_lbp_detect(&frontalface, integral, img.w, img.h, rects, 100, 1.2f, 1.0f,
+                                  4.0f, min_neighbors);
+
+  *out = gs_alloc(img.w, img.h);
+  gs_copy(*out, img);
+
+  for (unsigned i = 0; i < nrects; i++) {
+    struct gs_rect r = rects[i];
+    draw_line(*out, r.x, r.y, r.x + r.w, r.y, 255);
+    draw_line(*out, r.x, r.y + r.h, r.x + r.w, r.y + r.h, 255);
+    draw_line(*out, r.x, r.y, r.x, r.y + r.h, 255);
+    draw_line(*out, r.x + r.w, r.y, r.x + r.w, r.y + r.h, 255);
+  }
+}
+
 struct cmd {
   const char *name;
   const char *help;
@@ -361,6 +395,7 @@ struct cmd {
     {"scan", "                 Simple document scanner", 0, 1, scan},
     {"keypoints", "<n> <t>     Detect N keypoints with threshold T", 2, 1, keypoints},
     {"orb", "<template.pgm>    Find template in scene using ORB features", 1, 1, orb},
+    {"faces", "<n>             Detect faces using LBP cascade with N minNeighbors", 1, 1, faces},
     {NULL, NULL, 0, 0, NULL},
 };
 
