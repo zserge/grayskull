@@ -11,12 +11,17 @@
 #define GS_MIN(a, b) ((a) < (b) ? (a) : (b))
 #define GS_MAX(a, b) ((a) > (b) ? (a) : (b))
 
-struct gs_point {
-  unsigned x, y;
+struct gs_image {
+  unsigned w, h;
+  uint8_t *data;
 };
 
 struct gs_rect {
   unsigned x, y, w, h;
+};
+
+struct gs_point {
+  unsigned x, y;
 };
 
 typedef uint16_t gs_label;
@@ -46,9 +51,16 @@ struct gs_match {
   unsigned distance;
 };
 
-struct gs_image {
-  unsigned w, h;
-  uint8_t *data;
+struct gs_lbp_cascade {
+  uint16_t window_w, window_h;
+  uint16_t nfeatures, nweaks, nstages;
+  const int8_t *features; /* [nfeatures * 4] */
+  const uint16_t *weak_feature_idx;
+  const float *weak_left_val, *weak_right_val;
+  const uint16_t *weak_subset_offset, *weak_num_subsets;
+  const int32_t *subsets;
+  const uint16_t *stage_weak_start, *stage_nweaks;
+  const float *stage_threshold;
 };
 
 static inline int gs_valid(struct gs_image img) { return img.data && img.w > 0 && img.h > 0; }
@@ -142,7 +154,7 @@ GS_API void gs_set(struct gs_image img, unsigned x, unsigned y, uint8_t value) {
 GS_API void gs_crop(struct gs_image dst, struct gs_image src, struct gs_rect roi) {
   gs_assert(gs_valid(dst) && gs_valid(src) && roi.x + roi.w <= src.w && roi.y + roi.h <= src.h &&
             dst.w == roi.w && dst.h == roi.h);
-  gs_for(roi, x, y) dst.data[y * dst.w + x] = src.data[(roi.y + y) * src.w + (roi.x + x)];
+  gs_for(roi, x, y) gs_set(dst, x, y, gs_get(src, roi.x + x, roi.y + y));
 }
 
 GS_API void gs_copy(struct gs_image dst, struct gs_image src) {
@@ -159,12 +171,11 @@ GS_API void gs_resize(struct gs_image dst, struct gs_image src) {
     unsigned sx_int = (unsigned)sx, sy_int = (unsigned)sy;
     unsigned sx1 = GS_MIN(sx_int + 1, src.w - 1), sy1 = GS_MIN(sy_int + 1, src.h - 1);
     float dx = sx - sx_int, dy = sy - sy_int;
-    uint8_t c00 = src.data[sy_int * src.w + sx_int];
-    uint8_t c01 = src.data[sy_int * src.w + sx1];
-    uint8_t c10 = src.data[sy1 * src.w + sx_int];
-    uint8_t c11 = src.data[sy1 * src.w + sx1];
-    dst.data[y * dst.w + x] = (uint8_t)((c00 * (1 - dx) * (1 - dy)) + (c01 * dx * (1 - dy)) +
-                                        (c10 * (1 - dx) * dy) + (c11 * dx * dy));
+    uint8_t c00 = gs_get(src, sx_int, sy_int), c01 = gs_get(src, sx1, sy_int),
+            c10 = gs_get(src, sx_int, sy1), c11 = gs_get(src, sx1, sy1);
+    uint8_t p = (c00 * (1 - dx) * (1 - dy)) + (c01 * dx * (1 - dy)) + (c10 * (1 - dx) * dy) +
+                (c11 * dx * dy);
+    gs_set(dst, x, y, p);
   }
 }
 
@@ -218,13 +229,13 @@ GS_API void gs_adaptive_threshold(struct gs_image dst, struct gs_image src, unsi
       for (int dx = -radius; dx <= (int)radius; dx++) {
         int sy = (int)y + dy, sx = (int)x + dx;
         if (sy >= 0 && sy < (int)src.h && sx >= 0 && sx < (int)src.w) {
-          sum += src.data[sy * src.w + sx];
+          sum += gs_get(src, sx, sy);
           count++;
         }
       }
     }
     int threshold = sum / count - c;
-    dst.data[y * dst.w + x] = (src.data[y * src.w + x] > threshold) ? 255 : 0;
+    gs_set(dst, x, y, (gs_get(src, x, y) > threshold) ? 255 : 0);
   }
 }
 
@@ -236,12 +247,12 @@ GS_API void gs_blur(struct gs_image dst, struct gs_image src, unsigned radius) {
       for (int dx = -radius; dx <= (int)radius; dx++) {
         int sy = y + dy, sx = x + dx;
         if (sy >= 0 && sy < (int)src.h && sx >= 0 && sx < (int)src.w) {
-          sum += src.data[sy * src.w + sx];
+          sum += gs_get(src, sx, sy);
           count++;
         }
       }
     }
-    dst.data[y * dst.w + x] = (uint8_t)(sum / count);
+    gs_set(dst, x, y, (uint8_t)(sum / count));
   }
 }
 
@@ -254,13 +265,13 @@ static inline void gs_morph(struct gs_image dst, struct gs_image src, int op) {
       for (int dx = -1; dx <= 1; dx++) {
         int sy = (int)y + dy, sx = (int)x + dx;
         if (sy >= 0 && sy < (int)src.h && sx >= 0 && sx < (int)src.w) {
-          uint8_t pixel = src.data[sy * src.w + sx];
+          uint8_t pixel = gs_get(src, sx, sy);
           if (op == GS_DILATE && pixel > val) val = pixel;
           if (op == GS_ERODE && pixel < val) val = pixel;
         }
       }
     }
-    dst.data[y * dst.w + x] = val;
+    gs_set(dst, x, y, val);
   }
 }
 GS_API void gs_erode(struct gs_image dst, struct gs_image src) { gs_morph(dst, src, GS_ERODE); }
@@ -302,7 +313,7 @@ GS_API unsigned gs_blobs(struct gs_image img, gs_label *labels, struct gs_blob *
   for (unsigned i = 0; i <= nblobs; i++) parents[i] = i;
   // first pass: label and union
   gs_for(img, x, y) {
-    if (img.data[y * w + x] < 128) continue;  // skip background pixels
+    if (gs_get(img, x, y) < 128) continue;  // skip background pixels
     gs_label left = (x > 0) ? labels[y * w + (x - 1)] : 0;
     gs_label top = (y > 0) ? labels[(y - 1) * w + x] : 0;
     // 4-connectivity: pick smallest from left and top, if any is non-zero
@@ -371,7 +382,7 @@ GS_API void gs_blob_corners(struct gs_image img, gs_label *labels, struct gs_blo
   int min_sum = INT_MAX, max_sum = INT_MIN, min_diff = INT_MAX, max_diff = INT_MIN;
   for (unsigned y = b->box.y; y < b->box.y + b->box.h; y++) {
     for (unsigned x = b->box.x; x < b->box.x + b->box.w; x++) {
-      if (img.data[y * img.w + x] < 128) continue;  // skip background pixels
+      if (gs_get(img, x, y) < 128) continue;  // skip background pixels
       if (labels[y * img.w + x] != b->label) continue;
       int sum = (int)x + (int)y, diff = (int)x - (int)y;
       if (sum < min_sum) min_sum = sum, tl = (struct gs_point){x, y};
@@ -399,8 +410,8 @@ GS_API void gs_perspective_correct(struct gs_image dst, struct gs_image src, str
     unsigned sx = (unsigned)src_x, sy = (unsigned)src_y;
     unsigned sx1 = GS_MIN(sx + 1, src.w - 1), sy1 = GS_MIN(sy + 1, src.h - 1);
     float dx = src_x - sx, dy = src_y - sy;
-    uint8_t c00 = src.data[sy * src.w + sx], c01 = src.data[sy * src.w + sx1],
-            c10 = src.data[sy1 * src.w + sx], c11 = src.data[sy1 * src.w + sx1];
+    uint8_t c00 = gs_get(src, sx, sy), c01 = gs_get(src, sx1, sy), c10 = gs_get(src, sx, sy1),
+            c11 = gs_get(src, sx1, sy1);
     dst.data[y * dst.w + x] = (uint8_t)((c00 * (1 - dx) * (1 - dy)) + (c01 * dx * (1 - dy)) +
                                         (c10 * (1 - dx) * dy) + (c11 * dx * dy));
   }
@@ -418,14 +429,13 @@ GS_API void gs_trace_contour(struct gs_image img, struct gs_image visited, struc
   unsigned dir = 7, seenstart = 0;
 
   for (;;) {
-    if (!visited.data[p.y * visited.w + p.x]) c->length++;
-    visited.data[p.y * visited.w + p.x] = 255;
+    if (!gs_get(visited, p.x, p.y)) c->length++;
+    gs_set(visited, p.x, p.y, 255);
     int ndir = (dir + 1) % 8, found = 0;
     for (int i = 0; i < 8; i++) {
       int d = (ndir + i) % 8, nx = p.x + dx[d], ny = p.y + dy[d];
-      if (nx >= 0 && nx < (int)img.w && ny >= 0 && ny < (int)img.h &&
-          img.data[ny * img.w + nx] > 128) {
-        p = (struct gs_point){nx, ny};
+      if (nx >= 0 && nx < (int)img.w && ny >= 0 && ny < (int)img.h && gs_get(img, nx, ny) > 128) {
+        p = (struct gs_point){(unsigned)nx, (unsigned)ny};
         dir = (d + 6) % 8;
         found = 1;
         break;
@@ -452,11 +462,11 @@ GS_API unsigned gs_fast(struct gs_image img, struct gs_image scoremap, struct gs
   // first pass: compute score map
   for (unsigned y = 3; y < img.h - 3; y++) {
     for (unsigned x = 3; x < img.w - 3; x++) {
-      uint8_t p = img.data[y * img.w + x];
+      uint8_t p = gs_get(img, x, y);
       int run = 0, score = 0;
       for (int i = 0; i < 16 + 9; i++) {
         int idx = (i % 16);
-        uint8_t v = img.data[(y + dy[idx]) * img.w + (x + dx[idx])];
+        uint8_t v = gs_get(img, x + dx[idx], y + dy[idx]);
         if (v > p + threshold) {
           run = (run > 0) ? run + 1 : 1;
         } else if (v < p - threshold) {
@@ -474,18 +484,18 @@ GS_API unsigned gs_fast(struct gs_image img, struct gs_image scoremap, struct gs
           break;
         }
       }
-      scoremap.data[y * img.w + x] = score;
+      gs_set(scoremap, x, y, score);
     }
   }
   // second pass: non-maximum suppression
   for (unsigned y = 3; y < img.h - 3; y++) {
     for (unsigned x = 3; x < img.w - 3; x++) {
-      int s = scoremap.data[y * img.w + x], is_max = 1;
+      int s = gs_get(scoremap, x, y), is_max = 1;
       if (s == 0) continue;
       for (int yy = -1; yy <= 1 && is_max; yy++) {
         for (int xx = -1; xx <= 1; xx++) {
           if (xx == 0 && yy == 0) continue;
-          if (scoremap.data[(y + yy) * img.w + (x + xx)] > s) {
+          if (gs_get(scoremap, x + xx, y + yy) > s) {
             is_max = 0;
             break;
           }
@@ -575,7 +585,7 @@ GS_API float gs_compute_orientation(struct gs_image img, unsigned x, unsigned y,
   for (int dy = -(int)r; dy <= (int)r; dy++) {
     for (int dx = -(int)r; dx <= (int)r; dx++) {
       if (dx * dx + dy * dy <= (int)(r * r)) {
-        uint8_t intensity = img.data[(y + dy) * img.w + (x + dx)];
+        uint8_t intensity = gs_get(img, x + dx, y + dy);
         m01 += dy * intensity;
         m10 += dx * intensity;
       }
@@ -635,8 +645,8 @@ GS_API unsigned gs_orb_extract(struct gs_image img, struct gs_keypoint *kps, uns
 static inline unsigned gs_hamming_distance(const uint32_t desc1[8], const uint32_t desc2[8]) {
   unsigned dist = 0;
   for (int i = 0; i < 8; i++) {
-    uint32_t xor = desc1[i] ^ desc2[i];
-    while (xor) dist += xor&1, xor>>= 1;
+    uint32_t eor = desc1[i] ^ desc2[i];
+    while (eor) dist += eor & 1, eor >>= 1;
   }
   return dist;
 }
@@ -661,4 +671,102 @@ GS_API unsigned gs_match_orb(const struct gs_keypoint *kps1, unsigned n1,
   }
   return n;
 }
+
+//
+// Haar Cascade Classifier
+//
+
+GS_API void gs_integral(struct gs_image src, unsigned *ii) {
+  gs_assert(gs_valid(src) && ii);
+  unsigned row = 0;
+  gs_for(src, x, y) {
+    if (x == 0) row = 0;
+    row += gs_get(src, x, y);
+    ii[y * src.w + x] = row + (y ? ii[(y - 1) * src.w + x] : 0);
+  }
+}
+
+static inline uint32_t gs_integral_sum(const unsigned *ii, unsigned iw, unsigned x, unsigned y,
+                                       unsigned w, unsigned h) {
+  gs_assert(ii && iw > 0 && x + w <= iw);
+  unsigned x2 = x + w - 1, y2 = y + h - 1;
+  unsigned A = (x > 0 && y > 0) ? ii[(y - 1) * iw + (x - 1)] : 0;
+  unsigned B = (y > 0) ? ii[(y - 1) * iw + x2] : 0;
+  unsigned C = (x > 0) ? ii[y2 * iw + (x - 1)] : 0;
+  unsigned D = ii[y2 * iw + x2];
+  return D + A - B - C;
+}
+
+//
+// LBP cascade detection
+//
+
+static inline int gs_lbp_code(const unsigned *ii, unsigned iw, int x, int y, int fx, int fy, int fw,
+                              int fh) {
+  /* 3x3 LBP grid: TL TC TR / L C R / BL BC BR */
+  unsigned tl = gs_integral_sum(ii, iw, x + fx, y + fy, fw, fh);
+  unsigned tc = gs_integral_sum(ii, iw, x + fx + fw, y + fy, fw, fh);
+  unsigned tr = gs_integral_sum(ii, iw, x + fx + 2 * fw, y + fy, fw, fh);
+  unsigned l = gs_integral_sum(ii, iw, x + fx, y + fy + fh, fw, fh);
+  unsigned c = gs_integral_sum(ii, iw, x + fx + fw, y + fy + fh, fw, fh);
+  unsigned r = gs_integral_sum(ii, iw, x + fx + 2 * fw, y + fy + fh, fw, fh);
+  unsigned bl = gs_integral_sum(ii, iw, x + fx, y + fy + 2 * fh, fw, fh);
+  unsigned bc = gs_integral_sum(ii, iw, x + fx + fw, y + fy + 2 * fh, fw, fh);
+  unsigned br = gs_integral_sum(ii, iw, x + fx + 2 * fw, y + fy + 2 * fh, fw, fh);
+  return ((tl >= c) << 7) | ((tc >= c) << 6) | ((tr >= c) << 5) | ((r >= c) << 4) |
+         ((br >= c) << 3) | ((bc >= c) << 2) | ((bl >= c) << 1) | ((l >= c) << 0);
+}
+
+static inline int gs_lbp_match(int code, const int32_t *subsets, int n) {
+  int idx = code / 32, bit = code % 32;
+  return (idx < n) && (subsets[idx] & (1 << bit));
+}
+
+GS_API unsigned gs_lbp_window(const struct gs_lbp_cascade *c, const unsigned *ii, unsigned iw,
+                              unsigned ih, int x, int y, float scale) {
+  int win_w = (int)(c->window_w * scale), win_h = (int)(c->window_h * scale);
+  if (x + win_w > (int)iw || y + win_h > (int)ih) return 0;
+  for (int si = 0; si < c->nstages; si++) {
+    int start = c->stage_weak_start[si], n = c->stage_nweaks[si];
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+      int wi = start + i, fi = c->weak_feature_idx[wi];
+      int fx = (int)(c->features[fi * 4 + 0] * scale);
+      int fy = (int)(c->features[fi * 4 + 1] * scale);
+      int fw = (int)(c->features[fi * 4 + 2] * scale);
+      int fh = (int)(c->features[fi * 4 + 3] * scale);
+      if (fw < 1) fw = 1;
+      if (fh < 1) fh = 1;
+      int code = gs_lbp_code(ii, iw, x, y, fx, fy, fw, fh);
+      int match =
+          gs_lbp_match(code, &c->subsets[c->weak_subset_offset[wi]], c->weak_num_subsets[wi]);
+      sum += match ? c->weak_left_val[wi] : c->weak_right_val[wi];
+    }
+    if (sum < c->stage_threshold[si]) return 0;
+  }
+  return 1;
+}
+
+GS_API unsigned gs_lbp_detect(const struct gs_lbp_cascade *c, const unsigned *ii, unsigned iw,
+                              unsigned ih, struct gs_rect *rects, unsigned max_rects,
+                              float scale_factor, float min_scale, float max_scale, int step) {
+  unsigned n = 0;
+  for (float scale = min_scale; scale <= max_scale && n < max_rects; scale *= scale_factor) {
+    int win_w = (int)(c->window_w * scale), win_h = (int)(c->window_h * scale);
+    if (win_w > (int)iw || win_h > (int)ih) break;
+    for (int y = 0; y + win_h <= (int)ih && n < max_rects; y += step) {
+      for (int x = 0; x + win_w <= (int)iw && n < max_rects; x += step) {
+        if (gs_lbp_window(c, ii, iw, ih, x, y, scale)) {
+          rects[n].x = x;
+          rects[n].y = y;
+          rects[n].w = win_w;
+          rects[n].h = win_h;
+          n++;
+        }
+      }
+    }
+  }
+  return n;
+}
+
 #endif  // GRAYSKULL_H
