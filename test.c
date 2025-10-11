@@ -286,6 +286,26 @@ static void test_trace_contour(void) {
   }
 }
 
+static void test_integral(void) {
+  uint8_t data[3 * 3] = {
+      1, 2, 3,  //
+      4, 5, 6,  //
+      7, 8, 9   //
+  };
+  struct gs_image img = {3, 3, data};
+  unsigned ii[3 * 3] = {0};
+  gs_integral(img, ii);
+  unsigned expected_ii[3 * 3] = {
+      1,  3,  6,   //
+      5,  12, 21,  //
+      12, 27, 45   //
+  };
+  for (unsigned i = 0; i < 9; i++) assert(ii[i] == expected_ii[i]);
+
+  unsigned sum = gs_integral_sum(ii, 3, 1, 1, 2, 2);  // ((1,1), (2,2))
+  assert(sum == 28);                                  // 5+6+8+9, or 45+12-21-27
+}
+
 int main(void) {
   test_crop();
   test_resize();
@@ -298,5 +318,6 @@ int main(void) {
   test_sobel();
   test_blobs();
   test_trace_contour();
+  test_integral();
   return 0;
 }
