@@ -1,9 +1,6 @@
-![CI](https://img.shields.io/github/actions/workflow/status/zserge/grayskull/ci.yaml) ![License](https://img.shields.io/github/license/zserge/grayskull) ![C99](https://img.shields.io/badge/C-99-blue)
-
-
 # 🏰 Grayskull
 
-Grayskull is a minimalist, dependency-free alternative to OpenCV designed for microcontrollers and other resource-constrained devices. It focuses on **grayscale** images and provides modern, practical algorithms that fit in a few kilobytes of code. Single-header design, integer-based operations, pure C99.
+Grayskull is a minimalist, dependency-free computer vision library designed for microcontrollers and other resource-constrained devices. It focuses on **grayscale** images and provides modern, practical algorithms that fit in a few kilobytes of code. Single-header design, integer-based operations, pure C99.
 
 ## Features
 
@@ -12,6 +9,7 @@ Grayskull is a minimalist, dependency-free alternative to OpenCV designed for mi
 * Morphology: erosion, dilation
 * Geometry: connected components, perspective warp
 * Features: FAST/ORB keypoints and descriptors (object tracking)
+* Local binary patterns: LBP cascades to detect faces, vehicles etc
 * Utilities: PGM read/write
 
 As usual, no dependencies, no dynamic memory allocation, no C++, no surprises. Just a single header file under 1KLOC.
