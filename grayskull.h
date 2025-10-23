@@ -161,6 +161,13 @@ GS_API void gs_copy(struct gs_image dst, struct gs_image src) {
   gs_crop(dst, src, (struct gs_rect){0, 0, src.w, src.h});
 }
 
+GS_API void gs_resize_nn(struct gs_image dst, struct gs_image src) {
+  gs_for(dst, x, y) {
+    unsigned sx = x * src.w / dst.w, sy = y * src.h / dst.h;
+    gs_set(dst, x, y, gs_get(src, sx, sy));
+  }
+}
+
 GS_API void gs_resize(struct gs_image dst, struct gs_image src) {
   gs_assert(gs_valid(dst) && gs_valid(src));
   gs_for(dst, x, y) {
