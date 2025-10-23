@@ -699,7 +699,7 @@ GS_API unsigned gs_match_orb(const struct gs_keypoint *kps1, unsigned n1,
 }
 
 //
-// Haar Cascade Classifier
+// Integral image
 //
 
 GS_API void gs_integral(struct gs_image src, unsigned *ii) {
