@@ -421,6 +421,10 @@ int main(int argc, char *argv[]) {
       return 1;
     }
     struct gs_image img = gs_read_pgm(argv[cmd->argc + 2]);
+    if (!gs_valid(img)) {
+      fprintf(stderr, "Error: Could not load %s\n", argv[cmd->argc + 2]);
+      return 1;
+    }
     struct gs_image out = {0, 0, NULL};
     cmd->func(img, &out, argv + 2);
     if (cmd->hasout) {
