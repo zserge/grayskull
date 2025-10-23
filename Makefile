@@ -1,7 +1,7 @@
 CFLAGS ?= -std=c99 -Wall -Wextra -Werror -pedantic -g
 LDFLAGS ?= -lm
 
-all: test nanomagick document_scanner aruco_detector
+all: test nanomagick
 
 test:
 	$(CC) $(CFLAGS) -o test test.c $(LDFLAGS)
