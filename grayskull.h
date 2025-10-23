@@ -246,6 +246,25 @@ GS_API void gs_adaptive_threshold(struct gs_image dst, struct gs_image src, unsi
   }
 }
 
+static struct gs_image gs_sharpen = {3, 3, (uint8_t[]){0, -1, 0, -1, 5, -1, 0, -1, 0}};  // norm 1
+static struct gs_image gs_emboss = {3, 3, (uint8_t[]){-2, -1, 0, -1, 1, 1, 0, 1, 2}};    // norm 1
+static struct gs_image gs_blur_box = {3, 3, (uint8_t[]){1, 1, 1, 1, 1, 1, 1, 1, 1}};     // norm 9
+static struct gs_image gs_blur_gaussian = {3, 3,
+                                           (uint8_t[]){1, 2, 1, 2, 4, 2, 1, 2, 1}};  // norm 16
+
+GS_API void gs_filter(struct gs_image dst, struct gs_image src, struct gs_image kernel,
+                      unsigned norm) {
+  gs_assert(gs_valid(src) && gs_valid(dst) && dst.w == src.w && dst.h == src.h && norm > 0);
+  gs_for(dst, x, y) {
+    int sum = 0;
+    gs_for(kernel, i, j) {
+      sum += gs_get(src, x + i - kernel.w / 2, y + j - kernel.h / 2) * (int8_t)gs_get(kernel, i, j);
+    }
+    sum = sum / norm;
+    gs_set(dst, x, y, GS_MIN(255, GS_MAX(0, sum)));
+  }
+}
+
 GS_API void gs_blur(struct gs_image dst, struct gs_image src, unsigned radius) {
   gs_assert(gs_valid(src) && gs_valid(dst) && dst.w == src.w && dst.h == src.h);
   gs_for(src, x, y) {
