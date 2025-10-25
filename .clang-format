@@ -9,4 +9,6 @@ AllowShortEnumsOnASingleLine: true
 AllowShortFunctionsOnASingleLine: true
 AllowShortIfStatementsOnASingleLine: true
 AllowShortLoopsOnASingleLine: true
+DerivePointerAlignment: false
+PointerAlignment: Right
 ColumnLimit: 100

@@ -699,6 +699,45 @@ GS_API unsigned gs_match_orb(const struct gs_keypoint *kps1, unsigned n1,
 }
 
 //
+// Template matching
+//
+
+GS_API void gs_match_template(struct gs_image img, struct gs_image tmpl, struct gs_image result) {
+  gs_assert(gs_valid(img) && gs_valid(tmpl) && gs_valid(result));
+  gs_assert(img.w >= tmpl.w && img.h >= tmpl.h);
+  gs_assert(result.w == img.w - tmpl.w + 1 && result.h == img.h - tmpl.h + 1);
+
+  gs_for(result, rx, ry) {
+    unsigned long long sum = 0;
+    for (unsigned ty = 0; ty < tmpl.h; ty++) {
+      for (unsigned tx = 0; tx < tmpl.w; tx++) {
+        int diff = (int)gs_get(img, rx + tx, ry + ty) - (int)gs_get(tmpl, tx, ty);
+        sum += (unsigned long long)(diff * diff);
+      }
+    }
+    // Normalize to 0-255: lower values = better match
+    unsigned long long max_diff = (unsigned long long)tmpl.w * tmpl.h * 255ULL * 255ULL;
+    unsigned score = (unsigned)(sum * 255ULL / max_diff);
+    gs_set(result, rx, ry, (uint8_t)(255 - GS_MIN(score, 255)));
+  }
+}
+
+GS_API struct gs_point gs_find_best_match(struct gs_image result) {
+  gs_assert(gs_valid(result));
+  struct gs_point best = {0, 0};
+  uint8_t best_score = 0;
+  gs_for(result, x, y) {
+    uint8_t score = gs_get(result, x, y);
+    if (score > best_score) {
+      best_score = score;
+      best.x = x;
+      best.y = y;
+    }
+  }
+  return best;
+}
+
+//
 // Integral image
 //
 

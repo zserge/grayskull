@@ -306,6 +306,48 @@ static void test_integral(void) {
   assert(sum == 28);                                  // 5+6+8+9, or 45+12-21-27
 }
 
+static void test_template_matching(void) {
+  uint8_t data[5 * 5] = {
+      0, 0,   0,   0,   0,  // exact match
+      0, 100, 150, 200, 0,  //
+      0, 125, 175, 225, 0,  //
+      0, 110, 160, 210, 0,  //
+      0, 0,   0,   0,   0   //
+  };
+  uint8_t tmpl_data[3 * 3] = {
+      100, 150, 200,  //
+      125, 175, 225,  //
+      110, 160, 210   //
+  };
+  struct gs_image img = {5, 5, data};
+  struct gs_image tmpl = {3, 3, tmpl_data};
+  uint8_t result_data[3 * 3];
+  struct gs_image result = {3, 3, result_data};
+
+  gs_match_template(img, tmpl, result);
+  struct gs_point best = gs_find_best_match(result);
+  assert(best.x == 1 && best.y == 1 && gs_get(result, best.x, best.y) == 255);
+
+  uint8_t simple_img[4 * 4] = {
+      50, 50, 50, 50,  // simple pattern
+      50, W,  W,  50,  //
+      50, W,  W,  50,  //
+      50, 50, 50, 50   //
+  };
+  uint8_t simple_tmpl[2 * 2] = {
+      W, W,  //
+      W, W   //
+  };
+  struct gs_image simple = {4, 4, simple_img};
+  struct gs_image simple_t = {2, 2, simple_tmpl};
+  uint8_t simple_result_data[3 * 3];
+  struct gs_image simple_result = {3, 3, simple_result_data};
+
+  gs_match_template(simple, simple_t, simple_result);
+  struct gs_point simple_best = gs_find_best_match(simple_result);
+  assert(simple_best.x == 1 && simple_best.y == 1);
+}
+
 int main(void) {
   test_crop();
   test_resize();
@@ -319,5 +361,6 @@ int main(void) {
   test_blobs();
   test_trace_contour();
   test_integral();
+  test_template_matching();
   return 0;
 }
