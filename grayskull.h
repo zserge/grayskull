@@ -246,11 +246,11 @@ GS_API void gs_adaptive_threshold(struct gs_image dst, struct gs_image src, unsi
   }
 }
 
-static struct gs_image gs_sharpen = {3, 3, (uint8_t[]){0, -1, 0, -1, 5, -1, 0, -1, 0}};  // norm 1
-static struct gs_image gs_emboss = {3, 3, (uint8_t[]){-2, -1, 0, -1, 1, 1, 0, 1, 2}};    // norm 1
-static struct gs_image gs_blur_box = {3, 3, (uint8_t[]){1, 1, 1, 1, 1, 1, 1, 1, 1}};     // norm 9
-static struct gs_image gs_blur_gaussian = {3, 3,
-                                           (uint8_t[]){1, 2, 1, 2, 4, 2, 1, 2, 1}};  // norm 16
+#define gs_sharpen ((struct gs_image){3, 3, (uint8_t[]){0, -1, 0, -1, 5, -1, 0, -1, 0}})  // norm 1
+#define gs_emboss ((struct gs_image){3, 3, (uint8_t[]){-2, -1, 0, -1, 1, 1, 0, 1, 2}})    // norm 1
+#define gs_blur_box ((struct gs_image){3, 3, (uint8_t[]){1, 1, 1, 1, 1, 1, 1, 1, 1}})     // norm 9
+#define gs_blur_gaussian \
+  ((struct gs_image){3, 3, (uint8_t[]){1, 2, 1, 2, 4, 2, 1, 2, 1}})  // norm 16
 
 GS_API void gs_filter(struct gs_image dst, struct gs_image src, struct gs_image kernel,
                       unsigned norm) {
